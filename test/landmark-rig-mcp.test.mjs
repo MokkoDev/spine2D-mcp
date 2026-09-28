@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { PNG } from "pngjs";
 
-function result(response){assert.equal(response.isError,undefined,response.content?.[0]?.text);return JSON.parse(response.content[0].text)}
+function result(response){assert.equal(response.isError,undefined,response.content?.[0]?.text);return response.structuredContent}
 test("MCP rig workflow starts review, previews a draft, validates saved joints, and builds JSON",{timeout:30_000},async()=>{
   const folder=await mkdtemp(join(tmpdir(),"spine-rig-mcp-"));
   const client=new Client({name:"rig-review-test",version:"0.1.0"});
@@ -33,6 +33,6 @@ test("MCP rig workflow starts review, previews a draft, validates saved joints, 
     const out=join(folder,"body.json");const built=result(await client.callTool({name:"spine_build_rig_from_landmarks",arguments:{manifestPath:started.manifestPath,outputDataPath:out,editorVersion:"4.2"}}));
     assert.equal(built.outputDataPath,out);assert.equal(JSON.parse(await readFile(out,"utf8")).slots.length,1);
     const duplicate=await client.callTool({name:"spine_build_rig_from_landmarks",arguments:{manifestPath:started.manifestPath,outputDataPath:out,editorVersion:"4.2"}});
-    assert.equal(duplicate.isError,true);assert.equal(JSON.parse(duplicate.content[0].text).code,"OUTPUT_EXISTS");
+    assert.equal(duplicate.isError,true);assert.equal(duplicate.structuredContent.code,"OUTPUT_EXISTS");
   } finally {await client.close().catch(()=>undefined);await rm(folder,{recursive:true,force:true})}
 });

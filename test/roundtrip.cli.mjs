@@ -59,26 +59,30 @@ for (const version of ["4.2", "4.3"]) test(`MCP round trips a Spine ${version} p
       operations: [{ kind: "retime_animation", animation: "turn", scale: 2 }],
       frameStart: 0, frameEnd: 2, samples: 2,
     } });
-    assert.equal(response.isError, undefined, response.content?.[0]?.text);
-    const result = JSON.parse(response.content[0].text);
+    assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
+    assert.deepEqual(response.content, []);
+    const result = response.structuredContent;
     assert.equal(result.changeCount, 1);
     assert.equal(result.animation.before.duration, 1);
     assert.equal(result.animation.after.duration, 2);
     assert.equal(result.animation.fidelity.reviewNeeded, false);
-    assert.equal(result.animation.fidelity.semantic.differenceCount, 0);
+    assert.equal(result.animation.fidelity.semanticDifferenceCount, 0);
+    assert.equal(result.animation.before.timelines, undefined);
     assert.equal(result.pairs.length, 2);
-    assert.equal(result.motionReview.structural.animation, "turn");
-    assert.ok(result.motionReview.preview.sampledCount >= 2);
+    assert.ok(result.motionReview.sampledCount >= 2);
+    assert.equal(result.motionReview.preview, undefined);
+    const review = JSON.parse((await client.readResource({ uri: result.motionReview.reviewResourceUri })).contents[0].text);
+    assert.ok(review.preview.frames.length >= 2);
     const manifest = JSON.parse(await readFile(result.manifestPath, "utf8"));
     assert.equal(manifest.status, "complete");
     assert.equal(manifest.settings.data.path.includes(result.runDir), true);
     assert.equal(manifest.assets.copied, true);
     assert.equal((await readFile(projectPath)).equals(originalProject), true);
-    assert.deepEqual(validateDocument(await readDocument(result.reexported.path)), []);
+    assert.deepEqual(validateDocument(await readDocument(result.reexportedJsonPath)), []);
     const afterCheck = await client.callTool({ name: "spine_check_animation", arguments: {
-      path: result.reexported.path, animation: "turn", previewId: result.afterPreviewId,
+      path: result.reexportedJsonPath, animation: "turn", previewId: result.afterPreviewId,
     } });
-    assert.equal(afterCheck.isError, undefined, afterCheck.content?.[0]?.text);
+    assert.equal(afterCheck.isError, undefined, JSON.stringify(afterCheck.structuredContent));
     const sheet = await client.readResource({ uri: result.contactSheetUri });
     assert.equal(sheet.contents[0].mimeType, "image/png");
     assert.ok(sheet.contents[0].blob?.length > 0);

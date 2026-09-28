@@ -45,10 +45,9 @@ async function connect(extraEnv = {}) {
 }
 
 function parseTextResult(result) {
-  assert.equal(result.isError, undefined, result.content?.[0]?.text);
-  assert.equal(result.content.length, 1);
-  assert.equal(result.content[0].type, "text");
-  return JSON.parse(result.content[0].text);
+  assert.equal(result.isError, undefined, JSON.stringify(result.structuredContent));
+  assert.deepEqual(result.content, []);
+  return result.structuredContent;
 }
 
 test("stdio MCP handshake exposes and calls only implemented tools", { timeout: 20_000 }, async () => {
@@ -95,9 +94,9 @@ test("stdio MCP handshake exposes and calls only implemented tools", { timeout: 
     const capabilities = parseTextResult(
       await client.callTool({ name: "spine_capabilities", arguments: {} }),
     );
-    assert.deepEqual(capabilities.tools, TOOL_CATALOG);
+    assert.equal(capabilities.toolCount, TOOL_CATALOG.length);
+    assert.equal(capabilities.tools, undefined);
     assert.deepEqual([...new Set(TOOL_CATALOG.map((tool) => tool.area))].sort(), [...TOOL_AREAS].sort());
-    assert.ok(capabilities.tools.some((tool) => tool.status === "planned"));
     assert.ok(capabilities.areas.some((area) => area.name === "Visual review" && area.count > 0));
     const visualTools = parseTextResult(await client.callTool({ name: "spine_capabilities", arguments: {
       area: "Visual review", status: "implemented",
@@ -140,7 +139,7 @@ test("MCP creates a minimal skeleton that inspection can read", { timeout: 20_00
     assert.equal(inventory.version, "4.3");
     const duplicate = await client.callTool({ name: "spine_create_skeleton", arguments: { dataPath: path, version: "4.3" } });
     assert.equal(duplicate.isError, true);
-    assert.equal(JSON.parse(duplicate.content[0].text).code, "OUTPUT_EXISTS");
+    assert.equal(duplicate.structuredContent.code, "OUTPUT_EXISTS");
   } finally {
     await client.close();
     await rm(directory, { recursive: true, force: true });
@@ -166,7 +165,11 @@ test("MCP stages a new rig and animation as one edit", { timeout: 20_000 }, asyn
         time: 1, values: { value: 20 } },
       { kind: "set_keyframe", animation: "wave", selector: { section: "events" }, time: 0.5, values: { name: "beat" } },
     ] } }));
-    assert.equal(stage.summaries.length, 9);
+    assert.equal(stage.operationCount, 9);
+    assert.equal(stage.summaryCount, 9);
+    assert.equal(stage.changes, undefined);
+    const stageDetails = JSON.parse((await client.readResource({ uri: stage.stageResourceUri })).contents[0].text);
+    assert.equal(stageDetails.summaries.length, 9);
     assert.deepEqual(stage.diagnostics, []);
     parseTextResult(await client.callTool({ name: "spine_commit_edit", arguments: { editId: stage.editId } }));
     const data = JSON.parse(await readFile(path, "utf8"));
@@ -178,7 +181,7 @@ test("MCP stages a new rig and animation as one edit", { timeout: 20_000 }, asyn
       path, constraintType: "ik", name: "aim", edition: "essential", bones: ["arm"], target: "root",
     } });
     assert.equal(essentialConstraint.isError, true);
-    assert.equal(JSON.parse(essentialConstraint.content[0].text).code, "UNSUPPORTED_EDITION");
+    assert.equal(essentialConstraint.structuredContent.code, "UNSUPPORTED_EDITION");
     const constraint = parseTextResult(await client.callTool({ name: "spine_upsert_constraint", arguments: {
       path, constraintType: "ik", name: "aim", edition: "professional", bones: ["arm"], target: "root",
       values: { mix: 0.25 },
@@ -377,7 +380,7 @@ test("inspect, validate, stage, and commit a full animation retime", { timeout: 
     assert.equal(revision.baseEditId, preview.editId);
     assert.equal(revision.summaries[1].beforeDuration, 1);
     assert.equal(revision.summaries[1].afterDuration, 1.5);
-    assert.equal(revision.operations.length, 2);
+    assert.equal(revision.operationCount, 2);
     const netDiff = JSON.parse((await client.readResource({ uri: revision.netDiffResourceUri })).contents[0].text);
     assert.equal(netDiff.editId, revision.editId);
     assert.equal(netDiff.changes.length, revision.netChangeCount);
@@ -480,8 +483,10 @@ test("PNG preview invokes configured Spine CLI and exposes a frame resource", { 
     assert.equal(result.frameCount, 1);
     assert.equal(result.source.sourcePath, inputPath);
     assert.match(result.source.sourceHash, /^[0-9a-f]{64}$/);
-    assert.equal(result.cli.exitCode, 0);
-    const resource = await client.readResource({ uri: result.frames[0].uri });
+    assert.equal(result.cli, undefined);
+    assert.equal(result.frames, undefined);
+    assert.equal(result.frameTimes, undefined);
+    const resource = await client.readResource({ uri: result.sampledFrames[0].uri });
     assert.equal(resource.contents[0].mimeType, "image/png");
     assert.deepEqual(Buffer.from(resource.contents[0].blob, "base64"), png);
     const sheet = parseTextResult(await client.callTool({ name: "spine_contact_sheet", arguments: { previewId: result.previewId } }));
@@ -498,6 +503,9 @@ test("PNG preview invokes configured Spine CLI and exposes a frame resource", { 
       path: inputPath, animation: "walk", previewId: result.previewId,
     } }));
     assert.equal(combined.visual.previewId, result.previewId);
+    assert.equal(combined.visual.frames, undefined);
+    const visualDetails = JSON.parse((await client.readResource({ uri: combined.visual.reviewResourceUri })).contents[0].text);
+    assert.equal(visualDetails.frames[0].visiblePixels, 1);
     assert.equal(combined.checkedSource.sha256, result.source.sourceHash);
     assert.ok(combined.checksPerformed.includes("blank rendered frames"));
     const motion = parseTextResult(await client.callTool({ name: "spine_analyze_motion_quality", arguments: {
@@ -508,12 +516,12 @@ test("PNG preview invokes configured Spine CLI and exposes a frame resource", { 
       path: inputPath, animation: "walk", contactRegions: [{ name: "foot", fromFrame: 0,
         toFrame: 1, x: 0, y: 0, width: 1, height: 1, driftThresholdPixels: 2 }],
     } });
-    assert.equal(JSON.parse(missingPreview.content[0].text).code, "PREVIEW_REQUIRED");
+    assert.equal(missingPreview.structuredContent.code, "PREVIEW_REQUIRED");
     const mismatched = await client.callTool({ name: "spine_check_animation", arguments: {
       path: inputPath, animation: "idle", previewId: result.previewId,
     } });
     assert.equal(mismatched.isError, true);
-    assert.equal(JSON.parse(mismatched.content[0].text).code, "PREVIEW_ANIMATION_MISMATCH");
+    assert.equal(mismatched.structuredContent.code, "PREVIEW_ANIMATION_MISMATCH");
     const otherPath = join(directory, "other.json");
     await writeFile(otherPath, JSON.stringify(projectData));
     for (const name of ["spine_check_animation", "spine_analyze_motion_quality"]) {
@@ -521,7 +529,7 @@ test("PNG preview invokes configured Spine CLI and exposes a frame resource", { 
         path: otherPath, animation: "walk", previewId: result.previewId,
       } });
       assert.equal(wrongFile.isError, true);
-      assert.equal(JSON.parse(wrongFile.content[0].text).code, "PREVIEW_SOURCE_MISMATCH");
+      assert.equal(wrongFile.structuredContent.code, "PREVIEW_SOURCE_MISMATCH");
     }
     projectData.bones[1].length = 42;
     await writeFile(inputPath, JSON.stringify(projectData));
@@ -529,7 +537,35 @@ test("PNG preview invokes configured Spine CLI and exposes a frame resource", { 
       path: inputPath, animation: "walk", previewId: result.previewId,
     } });
     assert.equal(changedSource.isError, true);
-    assert.equal(JSON.parse(changedSource.content[0].text).code, "PREVIEW_SOURCE_MISMATCH");
+    assert.equal(changedSource.structuredContent.code, "PREVIEW_SOURCE_MISMATCH");
+  } finally {
+    await client.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("long PNG preview returns a small indexable summary", { timeout: 20_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine2d-mcp-long-preview-"));
+  const mockCli = join(directory, "Spine.sh");
+  const settingsPath = join(directory, "png.export.json");
+  const inputPath = join(directory, "character.json");
+  const png = Buffer.from(solidPng([255, 0, 0, 255]), "base64");
+  await writeFile(inputPath, JSON.stringify(fixture));
+  await writeFile(settingsPath, JSON.stringify({ class: "export-png", fps: 30 }));
+  await writeFile(mockCli, `#!/usr/bin/env node\nconst fs=require("node:fs");const path=require("node:path");const args=process.argv.slice(2);const out=args[args.indexOf("--output")+1];const png=Buffer.from("${png.toString("base64")}","base64");for(let i=0;i<140;i++)fs.writeFileSync(path.join(out,"walk-"+String(i).padStart(4,"0")+".png"),png);\n`);
+  await chmod(mockCli, 0o755);
+  const client = await connect({ SPINE_CLI_PATH: directory });
+  try {
+    const response = await client.callTool({ name: "spine_render_preview", arguments: {
+      inputPath, settingsPath, outputDir: directory, animation: "walk",
+    } });
+    const result = parseTextResult(response);
+    assert.equal(result.frameCount, 140);
+    assert.equal(result.sampledFrames.length, 3);
+    assert.deepEqual(result.sampledFrames.map((frame) => frame.index), [0, 69, 139]);
+    assert.ok(JSON.stringify(response).length < 3000);
+    const last = await client.readResource({ uri: result.frameUriTemplate.replace("{index}", "139") });
+    assert.deepEqual(Buffer.from(last.contents[0].blob, "base64"), png);
   } finally {
     await client.close();
     await rm(directory, { recursive: true, force: true });
@@ -552,7 +588,7 @@ test("PNG preview rejects a source changed during rendering", { timeout: 20_000 
       inputPath, settingsPath, outputDir: directory, animation: "walk",
     } });
     assert.equal(result.isError, true);
-    assert.equal(JSON.parse(result.content[0].text).code, "PREVIEW_SOURCE_CHANGED");
+    assert.equal(result.structuredContent.code, "PREVIEW_SOURCE_CHANGED");
     assert.ok(!(await readdir(directory)).some((name) => name.startsWith("spine-preview-")));
   } finally {
     await client.close();
@@ -575,7 +611,7 @@ test("PNG preview reports an unavailable graphics display clearly", { timeout: 2
       inputPath, settingsPath, outputDir: directory, animation: "walk",
     } });
     assert.equal(result.isError, true);
-    const error = JSON.parse(result.content[0].text);
+    const error = result.structuredContent;
     assert.equal(error.code, "SPINE_DISPLAY_UNAVAILABLE");
     assert.match(error.message, /DISPLAY/);
     assert.equal(error.details.exitCode, 1);
@@ -609,7 +645,7 @@ test("staged edit renders and compares before/after without changing source", { 
       path, animation: "walk", previewId: staged.previewId,
     } });
     assert.equal(missingEditId.isError, true);
-    assert.equal(JSON.parse(missingEditId.content[0].text).code, "PREVIEW_SOURCE_MISMATCH");
+    assert.equal(missingEditId.structuredContent.code, "PREVIEW_SOURCE_MISMATCH");
     const stagedCheck = parseTextResult(await client.callTool({ name: "spine_check_animation", arguments: {
       path, animation: "walk", previewId: staged.previewId, editId: preview.editId,
     } }));
@@ -868,7 +904,7 @@ test("minimal PNG settings render and gait review checks inferred foot plants", 
       inputPath: path, settingsPath, outputDir: directory, animation: "walk",
     } });
     assert.equal(invalid.isError, true);
-    assert.equal(JSON.parse(invalid.content[0].text).code, "INVALID_EXPORT_SETTINGS");
+    assert.equal(invalid.structuredContent.code, "INVALID_EXPORT_SETTINGS");
   } finally {
     await client.close();
     await rm(directory, { recursive: true, force: true });
@@ -1000,7 +1036,8 @@ test("MCP reviews visible foot drift from a rendered two-frame contact interval"
       inputPath, settingsPath, outputDir: directory, animation: "walk",
     } }));
     assert.equal(preview.frameCount, 2);
-    assert.deepEqual(preview.frameTimes, [0, 1 / 30]);
+    assert.equal(preview.fps, 30);
+    assert.equal(preview.frameStart, 0);
     const result = parseTextResult(await client.callTool({ name: "spine_analyze_motion_quality", arguments: {
       path: inputPath, animation: "walk", previewId: preview.previewId,
       contactRegions: [{ name: "leftFoot", fromFrame: 0, toFrame: 1,
@@ -1024,6 +1061,9 @@ test("MCP reviews visible foot drift from a rendered two-frame contact interval"
         surface: { point: { x: 0, y: 1 }, normal: { x: 0, y: 1 } } }],
     } }));
     assert.equal(generic.contact.contacts[0].maxDriftPixels, 3);
+    assert.equal(generic.contact.contacts[0].samples, undefined);
+    const contactDetails = JSON.parse((await client.readResource({ uri: generic.contact.reviewResourceUri })).contents[0].text);
+    assert.equal(contactDetails.contacts[0].samples.length, 2);
     assert.equal(generic.contact.contacts[0].maxPenetrationPixels, 0.5);
     assert.equal(generic.contact.contacts[1].maxPenetrationPixels, 1);
     assert.ok(generic.hints.some((hint) => hint.code === "CONTACT_DRIFT"));

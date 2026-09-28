@@ -247,7 +247,10 @@ export async function runExportProfile(workspaceDir: string, name: string, input
       results, outputs: await Promise.all(outputs.map(async (path) => ({ path, sha256: await hashFile(path) }))) };
     const manifestPath = join(runDir, "manifest.json");
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
-    return { runDir, manifestPath, ...manifest };
+    return { runDir, manifestPath, name: profile.name, editorVersion: profile.editorVersion,
+      runtimeVersion: profile.runtimeVersion, profileHash, steps: Object.keys(results),
+      outputCount: manifest.outputs.length,
+      ...(manifest.outputs.length <= 8 ? { outputPaths: manifest.outputs.map((entry) => entry.path) } : {}) };
   } catch (error) {
     await rm(runDir, { recursive: true, force: true });
     throw error;

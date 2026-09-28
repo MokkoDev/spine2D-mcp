@@ -110,7 +110,7 @@ export const IMPLEMENTED_TOOLS: readonly ToolCapability[] = [
     status: "implemented",
     area: "Server",
     backend: "server",
-    purpose: "List implemented and planned tools.",
+    purpose: "Summarize tool areas or search implemented and planned tools.",
   },
   { name: TOOL_NAMES.workflowGuide, status: "implemented", area: "Server", backend: "server", purpose: "Choose a short end-to-end workflow and its required inputs." },
   { name: TOOL_NAMES.searchReference, status: "implemented", area: "Server", backend: "server", purpose: "Search task-specific reference pages and return fetchable MCP resource URIs." },

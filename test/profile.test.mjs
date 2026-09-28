@@ -54,10 +54,10 @@ if (args.includes("--export")) {
     await chmod(mock, 0o755);
     process.env.SPINE_CLI_PATH = mock;
     const run = await runExportProfile(directory, "runtime", input, outputDir, imagesDir);
-    assert.equal(run.outputs.length, 4);
-    assert.ok(run.results.data && run.results.media && run.results.atlas);
+    assert.equal(run.outputCount, 4);
+    assert.deepEqual(run.steps, ["data", "media", "atlas"]);
     const manifest = JSON.parse(await readFile(run.manifestPath, "utf8"));
-    assert.deepEqual(manifest.outputs, run.outputs);
+    assert.deepEqual(manifest.outputs.map((entry) => entry.path), run.outputPaths);
     assert.equal(manifest.profileHash, run.profileHash);
     assert.equal(manifest.editorVersion, "4.3");
     for (const output of manifest.outputs) assert.match(output.sha256, /^[0-9a-f]{64}$/);

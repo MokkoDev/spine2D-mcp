@@ -17,7 +17,7 @@ Save JSON export settings in Spine with `class: "export-json"` and **Nonessentia
 }
 ```
 
-Read `motionReview`, `contactSheetUri`, PNG `pairs`, `importedProject.path`, and the run manifest. Pass `imagesDir` when the exported image path does not resolve beside the project. On Linux, set `display` if the server lacks `DISPLAY`. For manual steps, use `spine_export_data` → staged JSON edit → `spine_import_data` → `spine_render_preview`.
+Read `motionReview.hints`, `contactSheetUri`, PNG `pairs`, `projectPath`, and the run manifest. The full motion review is at `motionReview.reviewResourceUri`. Pass `imagesDir` when the exported image path does not resolve beside the project. On Linux, set `display` if the server lacks `DISPLAY`. For manual steps, use `spine_export_data` → staged JSON edit → `spine_import_data` → `spine_render_preview`.
 
 For JSON only, start with [Start here](start-here.md). Exact fields: [FUNCTIONS.md](../../FUNCTIONS.md).
 

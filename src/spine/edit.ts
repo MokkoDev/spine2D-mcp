@@ -586,6 +586,13 @@ export class EditStore {
     return { editId, changes: stage.changes };
   }
 
+  details(editId: string) {
+    this.discardExpired();
+    const stage = this.loadStage(editId);
+    if (!stage) throw new SpineError("EDIT_NOT_FOUND", "The staged edit does not exist or has expired.");
+    return { editId, operations: stage.operations, summaries: stage.summaries };
+  }
+
   netChanges(editId: string): { editId: string; sourceHash: string; afterHash: string; changes: KeyChange[] } {
     this.discardExpired();
     const stage = this.loadStage(editId);

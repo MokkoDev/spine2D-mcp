@@ -42,9 +42,10 @@ test("licensed Spine 4.2 and 4.3 run data and media export profiles", { timeout:
         { data: dataPath, media: mediaPath });
       const result = await runExportProfile(directory, `release${version.replace(".", "")}`,
         projectPath, join(directory, "outputs"));
-      assert.ok(result.results.data && result.results.media);
-      assert.ok(result.outputs.some((entry) => entry.path.endsWith(".json")));
-      const pngOutput = result.outputs.find((entry) => entry.path.endsWith(".png"));
+      assert.deepEqual(result.steps, ["data", "media"]);
+      const manifest = JSON.parse(await readFile(result.manifestPath, "utf8"));
+      assert.ok(manifest.outputs.some((entry) => entry.path.endsWith(".json")));
+      const pngOutput = manifest.outputs.find((entry) => entry.path.endsWith(".png"));
       assert.ok(pngOutput);
       assert.deepEqual((await readFile(pngOutput.path)).subarray(0, 8),
         Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));

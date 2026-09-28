@@ -56,17 +56,17 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
       dataPath, dataSettingsPath, previewSettingsPath, outputDir: join(directory, "deliveries"),
       editorVersion: version, animation: "turn", samples: 3,
     } });
-    assert.equal(response.isError, undefined, response.content?.[0]?.text);
-    const result = JSON.parse(response.content[0].text);
+    assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
+    const result = response.structuredContent;
     assert.equal(result.verified, true);
     assert.equal(result.projectMode, "created");
     assert.equal(result.fidelity.differenceCount, 0);
     assert.ok(result.projectPath.endsWith(".spine"));
     assert.ok(result.frameCount >= 3);
-    assert.equal(result.sampledIndices.length, 3);
+    assert.equal(result.frames.length, 3);
     assert.equal(result.animation.name, "turn");
     assert.equal(result.animation.keyCount, 2);
-    assert.equal(result.frames.length, 3);
+    assert.equal(result.previewReview.frames, undefined);
     assert.ok(JSON.stringify(result).length < 6000);
     assert.match(await readFile(result.htmlPath, "utf8"), /new spine\.SpinePlayer/);
     assert.deepEqual((await readFile(result.contactSheetPath)).subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
@@ -76,6 +76,7 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
     assert.equal(sheet.contents[0].mimeType, "image/png");
     const manifest = JSON.parse(await readFile(result.manifestPath, "utf8"));
     assert.equal(manifest.status, "complete");
+    assert.ok(manifest.rendered.review.frames.length >= 3);
     assert.equal(manifest.assets.atlas.generated, true);
     const effectivePreview = JSON.parse(await readFile(manifest.settings.effectivePreview.path, "utf8"));
     assert.equal(effectivePreview.skeleton, "rig");
@@ -97,8 +98,8 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
       dataPath, dataSettingsPath, previewSettingsPath, outputDir: join(directory, "updated-deliveries"),
       editorVersion: version, animation: "turn", samples: 3, ...existingProjectInput,
     } });
-    assert.equal(updatedResponse.isError, undefined, updatedResponse.content?.[0]?.text);
-    const updated = JSON.parse(updatedResponse.content[0].text);
+    assert.equal(updatedResponse.isError, undefined, JSON.stringify(updatedResponse.structuredContent));
+    const updated = updatedResponse.structuredContent;
     assert.equal(updated.projectMode, "updated");
     assert.equal(updated.projectPath, existingProjectPath);
     assert.deepEqual(await readFile(updated.backupPath), beforeProject);
@@ -116,7 +117,7 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
       existingProjectPath: isolatedProjectPath,
     } });
     assert.equal(missingImages.isError, true);
-    assert.match(missingImages.content[0].text, /MISSING_IMAGES/);
+    assert.equal(missingImages.structuredContent.code, "MISSING_IMAGES");
 
     const updatedHash = createHash("sha256").update(await readFile(existingProjectPath)).digest("hex");
     const incompatible = structuredClone(data);
@@ -128,7 +129,7 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
         editorVersion: version, animation: "turn", samples: 3, ...existingProjectInput,
       } });
       assert.equal(mismatch.isError, true);
-      assert.match(mismatch.content[0].text, /EXISTING_PROJECT_MISMATCH/);
+      assert.equal(mismatch.structuredContent.code, "EXISTING_PROJECT_MISMATCH");
       assert.equal(createHash("sha256").update(await readFile(existingProjectPath)).digest("hex"), updatedHash);
     } finally {
       await writeFile(dataPath, `${JSON.stringify(data, null, 2)}\n`);

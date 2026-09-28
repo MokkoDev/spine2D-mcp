@@ -51,7 +51,7 @@ const WORKFLOWS = {
     needs: [".spine project", "saved JSON export settings with nonessential: true",
       "saved PNG export settings", "animation name", "edit operations", "licensed Spine CLI and display/OpenGL"],
     steps: ["spine_round_trip_edit exports, stages, imports a new project, re-exports, validates, and renders both versions.",
-      "Read contactSheetUri and pairs, then inspect importedProject.path and the run manifest."],
+      "Read contactSheetUri and pairs, then inspect projectPath and the run manifest."],
   },
   final_delivery: {
     useWhen: "Deliver a reviewed skeleton JSON as a native .spine project with both visual previews.",
@@ -60,7 +60,7 @@ const WORKFLOWS = {
       "images or an atlas", "licensed Spine CLI and display/OpenGL"],
     steps: ["After reviewing and committing the JSON, call spine_finalize_animation once with its path and export settings.",
       "The tool verifies the JSON re-export, renders frames, and creates a contact sheet and HTML player. It updates a matching existing .spine project after verification, or creates one when none exists.",
-      "Deliver projectPath, htmlPath, and contactSheetPath together; inspect the returned previewReview."],
+      "Deliver projectPath, htmlPath, and contactSheetPath together; inspect previewReview hints and the full review in the run manifest when needed."],
   },
   new_motion: {
     useWhen: "Generate a new idle, blink, breathing, walk, run, recoil, or follow-through clip from a rig.",

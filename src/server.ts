@@ -40,15 +40,26 @@ import { RIG_ASSEMBLY_RULE, RIG_CONFIRMATION_RULE, SERVER_INSTRUCTIONS, workflow
 import { REFERENCE_PAGES, readReferencePage, referenceUri, searchReference } from "./reference.js";
 
 function jsonResult(value: Record<string, unknown>) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(value) }],
-    structuredContent: value,
-  };
+  return { content: [], structuredContent: value };
+}
+
+function compactStage(value: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(value.operations) || !Array.isArray(value.summaries)) return value;
+  const { operations, summaries, changes, netChanges, changesTruncated, changesOffset,
+    changeValuesTruncated, netChangesTruncated, netChangeValuesTruncated, ...rest } = value;
+  const large = operations.length > 4 || JSON.stringify(value).length > 6000;
+  return { ...rest, operationCount: operations.length,
+    stageResourceUri: `spine-edit://${value.editId}/stage`,
+    ...(large ? { summaryCount: summaries.length, summary: summaries.at(-1),
+      changesOmitted: true, netChangesOmitted: true } : {
+      summaries, changes, netChanges, changesTruncated, changesOffset,
+      changeValuesTruncated, netChangesTruncated, netChangeValuesTruncated,
+    }) };
 }
 
 async function runTool(action: () => Promise<Record<string, unknown>>) {
   try {
-    return jsonResult(await action());
+    return jsonResult(compactStage(await action()));
   } catch (error) {
     const issue = error instanceof SpineError
       ? error
@@ -79,6 +90,26 @@ export function createServer(): McpServer {
   const fullPoses = new Map<string, SavedPose>();
   const meshPoses = new Map<string, SavedMeshPose>();
   const players = new Map<string, string>();
+  const reviews = new Map<string, Record<string, unknown>>();
+
+  function publishReview(review: Record<string, unknown>): string {
+    const reviewId = randomUUID();
+    reviews.set(reviewId, review);
+    if (reviews.size > 20) reviews.delete(reviews.keys().next().value!);
+    return `spine-review://${reviewId}/details`;
+  }
+
+  function compactContacts(value: Record<string, unknown>) {
+    const compact = { ...value };
+    for (const key of ["contacts", "regions", "rigContacts"] as const) {
+      if (Array.isArray(compact[key])) compact[key] = compact[key].map((entry: Record<string, unknown>) => {
+        const { samples: _samples, centers: _centers, missingFrames, target: _target,
+          surface: _surface, bounds: _bounds, ...summary } = entry;
+        return { ...summary, missingFrameCount: Array.isArray(missingFrames) ? missingFrames.length : 0 };
+      });
+    }
+    return compact;
+  }
 
   async function hashFile(path: string): Promise<string> {
     let bytes: Buffer;
@@ -115,12 +146,15 @@ export function createServer(): McpServer {
       source,
       previewDir: result.previewDir,
       frameCount: result.frames.length,
-      ...(result.frameTimes ? { frameTimes: result.frameTimes.slice(0, 100),
-        frameTimesTruncated: result.frameTimes.length > 100 } : {}),
       ...(result.fps ? { fps: result.fps, frameStart: result.frameStart } : {}),
-      frames: result.frames.slice(0, 100).map((frame, index) => ({ name: frame.name, uri: `spine-preview://${previewId}/${index}` })),
-      framesTruncated: result.frames.length > 100,
-      cli: { executable: result.cli.executable, exitCode: result.cli.exitCode, stdout: result.cli.stdout.slice(0, 4000), stderr: result.cli.stderr.slice(0, 4000) },
+      frameUriTemplate: `spine-preview://${previewId}/{index}`,
+      sampledFrames: [...new Set([0, Math.floor((result.frames.length - 1) / 2), result.frames.length - 1])]
+        .map((index) => ({ index, uri: `spine-preview://${previewId}/${index}` })),
+      ...(result.cli.exitCode !== 0 || result.cli.stderr.trim() || /\b(?:warning|error)\b/i.test(result.cli.stdout) ? {
+        cli: { exitCode: result.cli.exitCode,
+          ...(result.cli.stderr.trim() ? { stderr: result.cli.stderr.slice(0, 4000) } : {}),
+          ...(/\b(?:warning|error)\b/i.test(result.cli.stdout) ? { stdout: result.cli.stdout.slice(0, 4000) } : {}) },
+      } : {}),
     };
   }
 
@@ -220,8 +254,11 @@ export function createServer(): McpServer {
       const tools = TOOL_CATALOG.filter((tool) => (!area || tool.area === area)
         && (!status || tool.status === status)
         && (!needle || `${tool.name} ${tool.purpose} ${tool.area}`.toLowerCase().includes(needle)));
-      return jsonResult({ tools, areas: TOOL_AREAS.map((name) => ({ name,
-        count: TOOL_CATALOG.filter((tool) => tool.area === name && tool.status === "implemented").length })) });
+      const areas = TOOL_AREAS.map((name) => ({ name,
+        count: TOOL_CATALOG.filter((tool) => tool.area === name && tool.status === "implemented").length }));
+      return jsonResult(area || query || status ? { tools, matchCount: tools.length }
+        : { toolCount: TOOL_CATALOG.length, areas,
+          searchHint: "Pass area, query, or status to list matching tools." });
     },
   );
 
@@ -318,10 +355,14 @@ export function createServer(): McpServer {
       const structural = await checkAnimation(document, animation, options);
       if (!previewId) return structural;
       const visual = await analyzePreview(frames!, { maxFrames, alphaThreshold, areaJumpRatio, fixedCanvas, edgeMargin });
+      const reviewResourceUri = publishReview(visual);
       return { ...structural, checkedSource: { path: document.path, sha256: document.hash,
         ...(editId ? { editId } : {}) },
         checksPerformed: [...structural.checksPerformed, ...visual.checksPerformed],
-        hints: [...structural.hints, ...visual.hints], visual: { previewId, ...(editId ? { editId } : {}), ...visual } };
+        hints: [...structural.hints, ...visual.hints],
+        visual: { previewId, ...(editId ? { editId } : {}),
+          frameCount: visual.frameCount, sampledCount: visual.sampledCount,
+          samplesTruncated: visual.samplesTruncated, reviewResourceUri } };
     }),
   );
 
@@ -440,12 +481,13 @@ export function createServer(): McpServer {
             groundBasis: suggestion.groundBasis, targets: suggestion.targets,
             stanceWindows: suggestion.stanceWindows, reviewNote: suggestion.reviewNote } } : {}) });
       }
+      const reviewResourceUri = publishReview(contactOutput);
       return { ...structural,
         checkedSource,
         checksPerformed,
         checksUnavailable: driftChecked ? structural.checksUnavailable.filter((check) => check !== "foot sliding")
           : structural.checksUnavailable,
-        hints, contact: contactOutput };
+        hints, contact: { ...compactContacts(contactOutput), reviewResourceUri } };
     }),
   );
 
@@ -1046,15 +1088,26 @@ export function createServer(): McpServer {
       const samples = result.manifest.visual.samples;
       return { runDir: result.runDir, manifestPath: result.manifestPath,
         editId: result.stage.editId, diffResourceUri: result.stage.diffResourceUri,
-        sourceProject: result.manifest.sourceProject,
         sourceJsonPath: result.manifest.edit.sourceJsonPath,
-        stagedJsonPath: result.manifest.edit.stagedJsonPath,
-        importedProject: result.manifest.importedProject,
-        reexported: result.manifest.reexported,
-        changeCount: result.stage.changeCount, changes: result.stage.changes,
-        changesTruncated: result.stage.changesTruncated, diagnostics: result.stage.diagnostics,
-        animation: result.manifest.animation,
-        motionReview: result.manifest.motionReview,
+        projectPath: result.manifest.importedProject.path,
+        reexportedJsonPath: result.manifest.reexported.path,
+        changeCount: result.stage.changeCount, diagnostics: result.stage.diagnostics,
+        animation: { beforeName: result.manifest.animation.beforeName,
+          afterName: result.manifest.animation.afterName,
+          before: { duration: result.manifest.animation.before.duration,
+            timelineCount: result.manifest.animation.before.timelineCount,
+            keyCount: result.manifest.animation.before.keyCount },
+          after: { duration: result.manifest.animation.after.duration,
+            timelineCount: result.manifest.animation.after.timelineCount,
+            keyCount: result.manifest.animation.after.keyCount },
+          fidelity: { reviewNeeded: result.manifest.animation.fidelity.reviewNeeded,
+            durationDelta: result.manifest.animation.fidelity.durationDelta,
+            timelineCountDelta: result.manifest.animation.fidelity.timelineCountDelta,
+            keyCountDelta: result.manifest.animation.fidelity.keyCountDelta,
+            semanticDifferenceCount: result.manifest.animation.fidelity.semantic.differenceCount } },
+        motionReview: { hints: result.manifest.motionReview.hints,
+          sampledCount: result.manifest.motionReview.preview.sampledCount,
+          reviewResourceUri: publishReview(result.manifest.motionReview) },
         beforePreviewId: beforePublished.previewId, afterPreviewId: afterPublished.previewId,
         beforeFrameCount: result.before.frames.length, afterFrameCount: result.after.frames.length,
         contactSheetUri: `spine-preview://${comparisonId}/${samples.length}`,
@@ -1102,12 +1155,14 @@ export function createServer(): McpServer {
         animation: { name: input.animation, duration: finalAnimation.duration,
           timelineCount: finalAnimation.timelineCount, keyCount: finalAnimation.keyCount },
         frameCount: result.rendered.frames.length, previewId: framePreview.previewId,
-        frames: sampledFrames, framesTruncated: sampledFrames.length < result.rendered.frames.length,
+        frames: sampledFrames,
         frameUriTemplate: `spine-preview://${framePreview.previewId}/{index}`,
-        sampledIndices: result.manifest.rendered.sampledIndices,
         contactSheetPath: result.sheet.path, contactSheetUri: `spine-preview://${sheetId}/0`,
         htmlPath: result.player.htmlPath, playerUri: `spine-player://${playerId}/html`,
-        runtimeSource: result.player.runtimeSource, previewReview: result.manifest.rendered.review };
+        runtimeSource: result.player.runtimeSource,
+        previewReview: { sampledCount: result.manifest.rendered.review.sampledCount,
+          hintCount: result.manifest.rendered.review.hints.length,
+          ...(result.manifest.rendered.review.hints.length ? { hints: result.manifest.rendered.review.hints } : {}) } };
     }),
   );
 
@@ -1859,6 +1914,26 @@ export function createServer(): McpServer {
     async (uri, { editId }) => ({
       contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(edits.netChanges(String(editId))) }],
     }),
+  );
+
+  server.registerResource(
+    "staged-edit-details",
+    new ResourceTemplate("spine-edit://{editId}/stage", { list: undefined }),
+    { title: "Staged edit operations and summaries", mimeType: "application/json" },
+    async (uri, { editId }) => ({
+      contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(edits.details(String(editId))) }],
+    }),
+  );
+
+  server.registerResource(
+    "review-details",
+    new ResourceTemplate("spine-review://{reviewId}/details", { list: undefined }),
+    { title: "Full frame or contact review", mimeType: "application/json" },
+    async (uri, { reviewId }) => {
+      const review = reviews.get(String(reviewId));
+      if (!review) throw new SpineError("REVIEW_NOT_FOUND", "The review is unavailable in this server session.");
+      return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(review) }] };
+    },
   );
 
   server.registerResource(
