@@ -896,6 +896,7 @@ test("MCP reviews visible foot drift from a rendered two-frame contact interval"
       inputPath, settingsPath, outputDir: directory, animation: "walk",
     } }));
     assert.equal(preview.frameCount, 2);
+    assert.deepEqual(preview.frameTimes, [0, 1 / 30]);
     const result = parseTextResult(await client.callTool({ name: "spine_analyze_motion_quality", arguments: {
       path: inputPath, animation: "walk", previewId: preview.previewId,
       contactRegions: [{ name: "leftFoot", fromFrame: 0, toFrame: 1,
@@ -903,6 +904,30 @@ test("MCP reviews visible foot drift from a rendered two-frame contact interval"
     } }));
     assert.equal(result.contact.regions[0].maxDriftPixels, 3);
     assert.ok(result.hints.some((hint) => hint.code === "POSSIBLE_FOOT_SLIDE"));
+    const generic = parseTextResult(await client.callTool({ name: "spine_analyze_motion_quality", arguments: {
+      path: inputPath, animation: "walk", previewId: preview.previewId,
+      contacts: [
+        { name: "front-paw", fromFrame: 0, toFrame: 1,
+          target: { kind: "region", x: 0, y: 0.25, width: 1, height: 0.75 },
+          driftThresholdPixels: 1, groundY: 5 / 8, penetrationThresholdPixels: 0.25 },
+        { name: "wheel-point", fromFrame: 0, toFrame: 1,
+          target: { kind: "point", positions: [
+            { frame: 0, x: 2 / 8, y: 4 / 8 }, { frame: 1, x: 5 / 8, y: 6 / 8 },
+          ] }, driftThresholdPixels: 1, groundY: 5 / 8, penetrationThresholdPixels: 0.5 },
+      ],
+      rigContacts: [{ name: "rig-touch", mode: "touch", fromFrame: 0, toFrame: 1,
+        target: { kind: "bonePoint", bone: "root", x: 0, y: 0 },
+        surface: { point: { x: 0, y: 1 }, normal: { x: 0, y: 1 } } }],
+    } }));
+    assert.equal(generic.contact.contacts[0].maxDriftPixels, 3);
+    assert.equal(generic.contact.contacts[0].maxPenetrationPixels, 0.5);
+    assert.equal(generic.contact.contacts[1].maxPenetrationPixels, 1);
+    assert.ok(generic.hints.some((hint) => hint.code === "CONTACT_DRIFT"));
+    assert.ok(generic.hints.some((hint) => hint.code === "GROUND_PENETRATION"));
+    assert.equal(generic.contact.contacts[0].basis, "visual-estimate");
+    assert.equal(generic.contact.rigContacts[0].basis, "rig-geometry");
+    assert.equal(generic.contact.rigContacts[0].maxPenetration, 1);
+    assert.ok(generic.hints.some((hint) => hint.code === "SURFACE_PENETRATION"));
   } finally {
     await client.close();
     await rm(directory, { recursive: true, force: true });

@@ -179,7 +179,7 @@ export const IMPLEMENTED_TOOLS: readonly ToolCapability[] = [
   { name: TOOL_NAMES.validateRigManifest, status: "implemented", area: "Art and rig", backend: "json", purpose: "Check landmark graph, PNG hashes, canvas bounds, and visual warnings." },
   { name: TOOL_NAMES.buildRigFromLandmarks, status: "implemented", area: "Art and rig", backend: "json+cli", purpose: "Compile a confirmed rig to new Spine JSON and optionally import a native project." },
   { name: TOOL_NAMES.previewRig, status: "implemented", area: "Visual review", backend: "json+cli", purpose: "Render setup and bend overlays and, when available, a Spine Web Player preview." },
-  { name: TOOL_NAMES.analyzeMotionQuality, status: "implemented", area: "Visual review", backend: "json+cli", purpose: "Combine animation diagnostics with contact-region drift measurements from preview frames." },
+  { name: TOOL_NAMES.analyzeMotionQuality, status: "implemented", area: "Visual review", backend: "json+cli", purpose: "Check rig-attached plant, touch, and roll contacts against a surface, with compatible visual contact estimates." },
   { name: TOOL_NAMES.commitEdit, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Commit a staged edit with backup and manifest." },
   { name: TOOL_NAMES.renderPreview, status: "implemented", area: "Visual review", backend: "cli", purpose: "Render PNG animation frames from saved Spine export settings." },
   { name: TOOL_NAMES.renderStagedEdit, status: "implemented", area: "Visual review", backend: "json+cli", purpose: "Render staged animation changes before commit." },

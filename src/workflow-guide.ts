@@ -57,7 +57,7 @@ const WORKFLOWS = {
     primaryTools: ["spine_generate_motion"],
     needs: ["Spine 4.2 or 4.3 skeleton JSON", "mapped rig bones or slot", "recipe parameters"],
     steps: ["spine_inspect_project to find valid rig names.", "spine_generate_motion to stage the clip.",
-      "spine_render_staged_edit for frames; spine_analyze_motion_quality for walk/run contact intervals.",
+      "spine_render_staged_edit for frames; spine_analyze_motion_quality for rig-attached plant, touch, or roll contacts.",
       "Revise the staged result with spine_preview_edit using baseEditId; render each revision and review its net diff.",
       "spine_commit_edit with only the chosen editId after reviewing its diff and frames."],
   },
@@ -81,12 +81,12 @@ const WORKFLOWS = {
       "Review the staged diff, then spine_commit_edit."],
   },
   review_motion: {
-    useWhen: "Check a rendered clip, especially loop seams and foot contact.",
+    useWhen: "Check a rendered clip, especially loop seams and contact with the ground.",
     primaryTools: ["spine_check_animation", "spine_render_preview", "spine_analyze_motion_quality"],
     needs: ["skeleton JSON", "animation", "licensed Spine CLI and display/OpenGL for rendered checks"],
     steps: ["spine_check_animation for structural diagnostics without rendering.",
       "spine_render_preview or spine_render_staged_edit to obtain previewId when visual checks are needed.",
-      "spine_analyze_motion_quality for contact drift hints; inspect the PNG frames yourself."],
+      "spine_analyze_motion_quality for rig-attached or visual contact hints; inspect the PNG frames yourself."],
   },
   batch_export: {
     useWhen: "Repeat saved export settings or animation edits across projects.",

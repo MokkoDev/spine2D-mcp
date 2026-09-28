@@ -16,7 +16,7 @@ import { parseDocument, readDocument } from "./spine/document.js";
 import { createProject, createSkeletonData } from "./spine/create.js";
 import { inspectAssets } from "./spine/assets.js";
 import { BatchJobStore } from "./spine/batch.js";
-import { analyzeFootContacts } from "./spine/contact.js";
+import { analyzeContacts, analyzeFootContacts } from "./spine/contact.js";
 import { cleanupAnimations, exportData, exportMedia, findSpineCli, importData, packAtlas, projectInfo, renderPreview, unpackAtlas } from "./spine/cli.js";
 import { EditStore } from "./spine/edit.js";
 import { SpineError } from "./spine/errors.js";
@@ -26,6 +26,7 @@ import { buildMotionOperations } from "./spine/motion.js";
 import { createPlayerPreview } from "./spine/player.js";
 import { buildRigFromLandmarks, readRigManifest, validateRigManifest } from "./spine/landmark-rig.js";
 import { saveRigDraft, startRigReview } from "./spine/rig-review.js";
+import { analyzeRigContacts } from "./spine/rig-contact.js";
 import { previewRig } from "./spine/rig-preview.js";
 import { roundTripEdit } from "./spine/roundtrip.js";
 import { inspectAnimation, inspectProject, projectEntries, referenceGraph, searchProject } from "./spine/inspect.js";
@@ -69,7 +70,8 @@ export function createServer(): McpServer {
   type PreviewSource = { kind: "file"; sourcePath: string; sourceHash: string }
     | { kind: "derived"; sourcePath: string; sourceHash: string; renderPath: string; renderHash: string }
     | { kind: "stage"; editId: string; sourcePath: string; afterHash: string };
-  type PreviewEntry = { frames: string[]; animation?: string; source?: PreviewSource };
+  type PreviewEntry = { frames: string[]; animation?: string; source?: PreviewSource;
+    frameTimes?: number[]; fps?: number; frameStart?: number; skin?: string };
   const previews = new Map<string, PreviewEntry>();
   const inventories = new Map<string, Record<string, unknown>>();
   const poses = new Map<string, SavedBonePose>();
@@ -92,9 +94,10 @@ export function createServer(): McpServer {
     throw new SpineError("PREVIEW_SOURCE_CHANGED", "The preview input changed while Spine rendered it.", { sourcePath });
   }
 
-  function publishFrames(paths: string[], animation?: string, source?: PreviewSource): string {
+  function publishFrames(paths: string[], animation?: string, source?: PreviewSource,
+    frameTimes?: number[], skin?: string, fps?: number, frameStart?: number): string {
     const previewId = randomUUID();
-    previews.set(previewId, { frames: paths, animation, source });
+    previews.set(previewId, { frames: paths, animation, source, frameTimes, skin, fps, frameStart });
     if (previews.size > 20) {
       const expired = previews.keys().next().value!;
       previews.delete(expired);
@@ -103,13 +106,17 @@ export function createServer(): McpServer {
   }
 
   function publishPreview(result: Awaited<ReturnType<typeof renderPreview>>, source: PreviewSource) {
-    const previewId = publishFrames(result.frames.map((frame) => frame.path), result.animation, source);
+    const previewId = publishFrames(result.frames.map((frame) => frame.path), result.animation, source,
+      result.frameTimes, result.skin, result.fps, result.frameStart);
     return {
       previewId,
       animation: result.animation,
       source,
       previewDir: result.previewDir,
       frameCount: result.frames.length,
+      ...(result.frameTimes ? { frameTimes: result.frameTimes.slice(0, 100),
+        frameTimesTruncated: result.frameTimes.length > 100 } : {}),
+      ...(result.fps ? { fps: result.fps, frameStart: result.frameStart } : {}),
       frames: result.frames.slice(0, 100).map((frame, index) => ({ name: frame.name, uri: `spine-preview://${previewId}/${index}` })),
       framesTruncated: result.frames.length > 100,
       cli: { executable: result.cli.executable, exitCode: result.cli.exitCode, stdout: result.cli.stdout.slice(0, 4000), stderr: result.cli.stderr.slice(0, 4000) },
@@ -139,7 +146,8 @@ export function createServer(): McpServer {
         "The preview was rendered from a different skeleton or version. Use its source JSON or supply the matching staged editId.",
         { previewId, source, suppliedPath: document.path, suppliedHash: document.hash, ...(editId ? { editId } : {}) });
     }
-    return { document, frames: preview.frames };
+    return { document, frames: preview.frames, frameTimes: preview.frameTimes,
+      fps: preview.fps, frameStart: preview.frameStart, skin: preview.skin };
   }
 
   async function withStageFiles<T>(editId: string, action: (beforePath: string, afterPath: string, snapshot: ReturnType<EditStore["snapshot"]>) => Promise<T>): Promise<T> {
@@ -290,7 +298,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_check_animation",
     {
-      description: "Review one animation's timeline structure; optionally combine it with an existing previewId. Use spine_analyze_motion_quality for foot contact regions.",
+      description: "Review one animation's timeline structure; optionally combine it with an existing previewId. Use spine_analyze_motion_quality for rendered contact checks.",
       inputSchema: z.object({
         path: z.string().min(1),
         animation: z.string().min(1),
@@ -319,10 +327,40 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.analyzeMotionQuality,
     {
-      description: "Review one animation and measure visible foot drift in selected contact regions of a rendered preview. Use spine_check_animation for structural checks alone.",
+      description: "Review one animation with rig-attached plant, touch, or roll contacts on bones or attachment geometry. Manual point and region contacts and legacy contactRegions remain available as visual estimates. Rig contacts use Spine coordinates and preview frame timing.",
       inputSchema: z.object({ path: z.string().min(1), animation: z.string().min(1),
         loop: z.boolean().optional(), deformThreshold: z.number().finite().positive().optional(),
         checkAssets: z.boolean().optional(), previewId: z.uuid().optional(), editId: z.uuid().optional(),
+        contacts: z.array(z.object({ name: z.string().min(1),
+          fromFrame: z.number().int().nonnegative(), toFrame: z.number().int().nonnegative(),
+          target: z.discriminatedUnion("kind", [
+            z.object({ kind: z.literal("region"), x: z.number().finite().min(0).max(1),
+              y: z.number().finite().min(0).max(1), width: z.number().finite().gt(0).max(1),
+              height: z.number().finite().gt(0).max(1) }),
+            z.object({ kind: z.literal("point"), positions: z.array(z.object({
+              frame: z.number().int().nonnegative(), x: z.number().finite().min(0).max(1),
+              y: z.number().finite().min(0).max(1) })).min(1).max(60) }),
+          ]),
+          driftThresholdPixels: z.number().finite().positive().optional(),
+          groundY: z.number().finite().min(0).max(1).optional(),
+          penetrationThresholdPixels: z.number().finite().nonnegative().optional(),
+          minimumPenetratingPixels: z.number().int().min(1).max(10000).optional(),
+        })).min(1).max(8).optional(),
+        rigContacts: z.array(z.object({ name: z.string().min(1), mode: z.enum(["plant", "touch", "roll"]),
+          fromFrame: z.number().int().nonnegative(), toFrame: z.number().int().nonnegative(),
+          target: z.discriminatedUnion("kind", [
+            z.object({ kind: z.literal("bonePoint"), bone: z.string().min(1),
+              x: z.number().finite(), y: z.number().finite() }),
+            z.object({ kind: z.literal("attachmentShape"), slot: z.string().min(1),
+              attachment: z.string().min(1),
+              vertexIndices: z.array(z.number().int().nonnegative()).min(1).max(256).optional() }),
+          ]),
+          surface: z.object({ point: z.object({ x: z.number().finite(), y: z.number().finite() }),
+            normal: z.object({ x: z.number().finite(), y: z.number().finite() }) }),
+          slipThreshold: z.number().finite().nonnegative().optional(),
+          penetrationThreshold: z.number().finite().nonnegative().optional(),
+          rollingRadius: z.number().finite().positive().optional(),
+        })).min(1).max(8).optional(),
         contactRegions: z.array(z.object({ name: z.string().min(1),
           fromFrame: z.number().int().nonnegative(), toFrame: z.number().int().nonnegative(),
           x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1),
@@ -331,23 +369,59 @@ export function createServer(): McpServer {
         alphaThreshold: z.number().int().min(1).max(255).optional(),
         minimumVisiblePixels: z.number().int().min(1).max(10000).optional() }),
     },
-    async ({ path, animation, previewId, editId, contactRegions, alphaThreshold, minimumVisiblePixels, ...options }) => runTool(async () => {
-      if (contactRegions && !previewId) {
-        throw new SpineError("PREVIEW_REQUIRED", "Contact regions require a rendered previewId.");
+    async ({ path, animation, previewId, editId, contacts, rigContacts, contactRegions, alphaThreshold, minimumVisiblePixels, ...options }) => runTool(async () => {
+      if (contacts && contactRegions) {
+        throw new SpineError("INVALID_CONTACT", "Use contacts or legacy contactRegions, not both in one request.");
       }
-      const { document, frames } = await previewForCheck(path, animation, previewId, editId);
+      if ((contacts || rigContacts || contactRegions) && !previewId) {
+        throw new SpineError("PREVIEW_REQUIRED", "Contact checks require a rendered previewId.");
+      }
+      const { document, frames, fps, frameStart, skin } = await previewForCheck(path, animation, previewId, editId);
       const structural = await checkAnimation(document, animation, options);
       if (!previewId) return structural;
       const checkedSource = { path: document.path, sha256: document.hash, ...(editId ? { editId } : {}) };
-      if (!contactRegions) return { ...structural, previewId, checkedSource };
-      const contact = await analyzeFootContacts(frames!, contactRegions, { alphaThreshold, minimumVisiblePixels });
+      if (!contacts && !rigContacts && !contactRegions) return { ...structural, previewId, checkedSource };
+      const contactOutput: Record<string, unknown> = { previewId, frameCount: frames!.length };
+      const hints = [...structural.hints];
+      const checksPerformed = [...structural.checksPerformed];
+      let driftChecked = false;
+      if (contacts) {
+        const contact = await analyzeContacts(frames!, contacts, { alphaThreshold, minimumVisiblePixels });
+        driftChecked = contacts.some((entry) => entry.driftThresholdPixels !== undefined);
+        if (driftChecked) checksPerformed.push("visual contact drift along the ground line");
+        if (contacts.some((entry) => entry.groundY !== undefined)) checksPerformed.push("visual ground penetration in selected contacts");
+        hints.push(...contact.hints);
+        Object.assign(contactOutput, { alphaThreshold: contact.alphaThreshold,
+          minimumVisiblePixels: contact.minimumVisiblePixels,
+          contacts: contact.contacts.map((entry) => ({ ...entry, basis: "visual-estimate" })) });
+      }
+      if (contactRegions) {
+        const contact = await analyzeFootContacts(frames!, contactRegions, { alphaThreshold, minimumVisiblePixels });
+        driftChecked = true;
+        checksPerformed.push("visible foot drift in selected contact regions");
+        hints.push(...contact.hints);
+        Object.assign(contactOutput, { alphaThreshold: contact.alphaThreshold,
+          minimumVisiblePixels: contact.minimumVisiblePixels,
+          regions: contact.contacts.map((entry) => ({ ...entry, basis: "visual-estimate" })) });
+      }
+      if (rigContacts) {
+        if (fps === undefined || frameStart === undefined) {
+          throw new SpineError("PREVIEW_TIMING_UNAVAILABLE", "Rig contacts need a preview rendered with an explicit FPS.");
+        }
+        const rig = analyzeRigContacts(document, animation,
+          { fps, frameStart, frameCount: frames!.length, skin }, rigContacts);
+        driftChecked ||= rigContacts.some((entry) => entry.mode !== "touch");
+        checksPerformed.push("rig-attached surface contact and rolling motion");
+        hints.push(...rig.hints);
+        Object.assign(contactOutput, { rigContacts: rig.contacts,
+          rigTiming: { fps: rig.fps, frameStart: rig.frameStart, units: rig.units } });
+      }
       return { ...structural,
         checkedSource,
-        checksPerformed: [...structural.checksPerformed, "visible foot drift in selected contact regions"],
-        checksUnavailable: structural.checksUnavailable.filter((check) => check !== "foot sliding"),
-        hints: [...structural.hints, ...contact.hints],
-        contact: { previewId, frameCount: contact.frameCount, alphaThreshold: contact.alphaThreshold,
-          minimumVisiblePixels: contact.minimumVisiblePixels, regions: contact.contacts } };
+        checksPerformed,
+        checksUnavailable: driftChecked ? structural.checksUnavailable.filter((check) => check !== "foot sliding")
+          : structural.checksUnavailable,
+        hints, contact: contactOutput };
     }),
   );
 

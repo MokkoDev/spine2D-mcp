@@ -441,9 +441,18 @@ export async function renderPreview(input: RenderPreviewInput) {
     const images = files.filter((file) => extname(file).toLowerCase() === ".png")
       .sort((left, right) => frameOrder.compare(left, right));
     if (images.length === 0) throw new SpineError("NO_RENDER_OUTPUT", "Spine CLI completed without creating PNG preview files.", { stdout: cli.stdout, stderr: cli.stderr });
+    const fps = typeof configured.fps === "number" && Number.isFinite(configured.fps) && configured.fps > 0
+      ? configured.fps : undefined;
+    const frameStart = typeof configured.rangeStart === "number" && Number.isInteger(configured.rangeStart)
+      && configured.rangeStart >= 0 ? configured.rangeStart : 0;
+    const skin = configured.skinType === "single" && typeof configured.skin === "string" ? configured.skin : undefined;
     return {
       inputPath: resolve(input.inputPath), animation: input.animation, previewDir,
       frames: images.map((path) => ({ path, name: basename(path) })),
+      frameTimes: fps === undefined ? undefined : images.map((_path, index) => (frameStart + index) / fps),
+      fps,
+      frameStart,
+      skin,
       cli: { executable: cli.executable, exitCode: cli.exitCode, stdout: cli.stdout, stderr: cli.stderr },
     };
   } catch (error) {
