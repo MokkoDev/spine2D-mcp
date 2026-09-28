@@ -64,6 +64,19 @@ test("stdio MCP handshake exposes and calls only implemented tools", { timeout: 
     assert.match(client.getInstructions(), /spine_workflow_guide/);
     assert.match(client.getInstructions(), /spine_preview_edit/);
 
+    const { resources } = await client.listResources();
+    assert.ok(resources.some((resource) => resource.uri === "spine-docs://reference/start-here"));
+    const start = await client.readResource({ uri: "spine-docs://reference/start-here" });
+    assert.match(start.contents[0].text, /inspect → edit → preview → commit/);
+    const referenceMatches = parseTextResult(await client.callTool({ name: "spine_search_reference", arguments: { query: "retime animation" } }));
+    assert.ok(referenceMatches.pages.some((page) => page.uri === "spine-docs://reference/edit-json"));
+    const detail = await client.readResource({ uri: "spine-docs://reference/edit-json" });
+    assert.match(detail.contents[0].text, /spine_retime_animation/);
+    const fetched = parseTextResult(await client.callTool({ name: "spine_get_reference", arguments: { slug: "edit-json" } }));
+    assert.equal(fetched.markdown, detail.contents[0].text);
+    const referenceTool = tools.find((tool) => tool.name === "spine_search_reference");
+    assert.equal(referenceTool.inputSchema.properties.query.type, "string");
+
     const status = parseTextResult(await client.callTool({ name: "spine_status", arguments: {} }));
     assert.equal(status.name, SERVER_NAME);
     assert.equal(status.version, SERVER_VERSION);

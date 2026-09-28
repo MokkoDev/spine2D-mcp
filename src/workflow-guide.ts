@@ -1,10 +1,8 @@
 export const SERVER_INSTRUCTIONS = [
-  "Start with spine_workflow_guide({goal:'choose'}) when the requested Spine workflow is unclear.",
-  "Use spine_inspect_project and spine_inspect_animation to identify JSON targets; use spine_capabilities with an area or query to find specialized tools.",
-  "For an existing .spine project needing edit, import, and visual verification, use spine_round_trip_edit. For coordinated edits to skeleton JSON, use spine_preview_edit; a named edit tool is simpler for one operation.",
-  "All JSON edit tools stage a change. Review its diagnostics and diff, then call spine_commit_edit with the returned editId to save it.",
-  "Use spine_render_preview for an existing file, spine_render_staged_edit for one staged result, and spine_compare_previews to compare before and after a staged edit.",
-  "For independently cropped PNG body parts, use spine_start_rig_review and confirm landmarks in the browser before spine_build_rig_from_landmarks.",
+  "Read spine-docs://reference/start-here for the short inspect, edit, preview, commit tutorial.",
+  "Use spine_search_reference to find a task page; fetch it with spine_get_reference or MCP resources/read.",
+  "Call spine_workflow_guide({goal:'choose'}) if the workflow is unclear, or spine_capabilities to find a specialized typed tool.",
+  "For related JSON changes, spine_preview_edit stages a validated edit. Review diagnostics and diff before spine_commit_edit saves it.",
 ].join(" ");
 
 const WORKFLOWS = {
@@ -86,7 +84,7 @@ const WORKFLOWS = {
 export type WorkflowGoal = "choose" | keyof typeof WORKFLOWS;
 
 export function workflowGuide(goal: WorkflowGoal = "choose") {
-  if (goal === "choose") return { startHere: "Choose by source file and desired output, then call the matching goal for steps.",
+  if (goal === "choose") return { startHere: "Read spine-docs://reference/start-here, then choose by source file and desired output. Use spine_search_reference for detailed examples.",
     workflows: Object.entries(WORKFLOWS).map(([name, guide]) => ({ name, useWhen: guide.useWhen, primaryTools: guide.primaryTools })) };
   return { goal, ...WORKFLOWS[goal] };
 }

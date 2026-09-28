@@ -35,6 +35,7 @@ import { analyzePreview, checkAnimation } from "./spine/quality.js";
 import { validateDocument } from "./spine/validate.js";
 import { createFrameContactSheet, createVisualComparison } from "./spine/visual.js";
 import { SERVER_INSTRUCTIONS, workflowGuide } from "./workflow-guide.js";
+import { REFERENCE_PAGES, readReferencePage, referenceUri, searchReference } from "./reference.js";
 
 function jsonResult(value: Record<string, unknown>) {
   return {
@@ -182,6 +183,20 @@ export function createServer(): McpServer {
     { description: "Start here when a Spine task could use several tools. Choose by source and outcome; get the recommended entry tools and steps.",
       inputSchema: z.object({ goal: z.enum(["choose", "inspect", "create_project", "rig_review", "round_trip", "new_motion", "edit_json", "reuse_pose", "review_motion", "batch_export"]).optional() }) },
     async ({ goal }) => runTool(async () => workflowGuide(goal)),
+  );
+
+  server.registerTool(
+    TOOL_NAMES.searchReference,
+    { description: "Search Spine task guides by words or tool names. Returns short matches, slugs, and resource URIs; fetch one page with spine_get_reference or MCP resources/read.",
+      inputSchema: z.object({ query: z.string().trim().min(1).max(100), limit: z.number().int().min(1).max(8).optional() }) },
+    async ({ query, limit }) => runTool(async () => ({ pages: await searchReference(query, limit) })),
+  );
+
+  server.registerTool(
+    TOOL_NAMES.getReference,
+    { description: "Fetch one Spine task reference page with examples. Use spine_search_reference to choose its slug.",
+      inputSchema: z.object({ slug: z.enum(REFERENCE_PAGES.map((page) => page.slug) as [typeof REFERENCE_PAGES[number]["slug"], ...typeof REFERENCE_PAGES[number]["slug"][]]) }) },
+    async ({ slug }) => runTool(async () => ({ slug, uri: referenceUri(slug), markdown: await readReferencePage(slug) })),
   );
 
   server.registerTool(
@@ -1628,6 +1643,15 @@ export function createServer(): McpServer {
       };
     }),
   );
+
+  for (const page of REFERENCE_PAGES) {
+    server.registerResource(
+      `reference-${page.slug}`,
+      referenceUri(page.slug),
+      { title: page.title, description: page.description, mimeType: "text/markdown" },
+      async (uri) => ({ contents: [{ uri: uri.href, mimeType: "text/markdown", text: await readReferencePage(page.slug) }] }),
+    );
+  }
 
   server.registerResource(
     "project-inventory",

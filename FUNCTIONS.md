@@ -2,7 +2,7 @@
 
 This is the MCP tool catalog. **Implemented** tools are callable now. **Planned** tools describe later work and are not registered with the MCP server. Planned inputs and outputs below are design targets, not current API schemas. Implemented JSON editing is currently limited to tested Spine 4.2 and 4.3 exports; other versions can be inspected, but validation flags them and edits are rejected.
 
-For tool selection, call `spine_workflow_guide` with `goal: "choose"`. It groups common requests by source and desired result and names the primary tools for each workflow. Use `spine_capabilities` with `area`, `query`, or `status` to narrow the catalog when you need a specialized function. For one JSON edit, use the named edit tool; for several related edits in one validated stage, use `spine_preview_edit`. All JSON edit tools return an `editId`; `spine_commit_edit` saves the selected stage.
+Start with [the short tutorial](docs/reference/start-here.md), also available as `spine-docs://reference/start-here`. Call `spine_search_reference` to find task pages and fetch the returned slug with `spine_get_reference` or read its MCP resource URI for examples. For tool selection, call `spine_workflow_guide` with `goal: "choose"`. Use `spine_capabilities` with `area`, `query`, or `status` to narrow the catalog. For one JSON edit, use the named edit tool; for several related edits in one validated stage, use `spine_preview_edit`. All JSON edit tools return an `editId`; `spine_commit_edit` saves the selected stage. Clients that support deferred MCP tool search can load relevant typed schemas on demand; see [README.md](README.md#deferred-tool-search-in-supporting-clients).
 
 For JSON tools, `path` or `dataPath` means a Spine skeleton JSON file. For CLI tools, `projectPath` means a `.spine` project file. A later implementation will define exact schemas and safety rules before enabling planned tools. Spine's [JSON format](https://en.esotericsoftware.com/spine-json-format) includes bones, slots, skins, attachments, constraints, events, and animation timelines; its [CLI](https://en.esotericsoftware.com/spine-command-line-interface) supports import/export and batch operations.
 
@@ -13,6 +13,8 @@ For JSON tools, `path` or `dataPath` means a Spine skeleton JSON file. For CLI t
 | `spine_status` | Implemented | `{}` | `{ name, version, transport, spineIntegration, cli, supportedSpineVersions }` | Report server identity and whether a Spine CLI executable is available. |
 | `spine_capabilities` | Implemented | Optional `area`, `query`, `status` (`implemented` or `planned`) | Filtered `tools: [{ name, status, area, backend, purpose }]` and area counts | Find specialized tools; omit filters to list the full catalog. |
 | `spine_workflow_guide` | Implemented | Optional `goal` (`choose`, `inspect`, `create_project`, `rig_review`, `round_trip`, `new_motion`, `edit_json`, `reuse_pose`, `review_motion`, `batch_export`) | Primary tools, short sequence, and required inputs for the selected task | Choose an end-to-end path from the larger tool catalog. |
+| `spine_search_reference` | Implemented | `query` (1–100 characters), optional `limit` (1–8; default 8) | Matching page titles, descriptions, excerpts, and `spine-docs://reference/...` URIs | Find a task-specific Markdown guide, then fetch just that resource. |
+| `spine_get_reference` | Implemented | `slug` returned by `spine_search_reference` | One page's Markdown and resource URI | Fetch a guide in clients that expose tools but do not expose MCP resources. |
 
 ## Project understanding
 
