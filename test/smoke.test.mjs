@@ -76,6 +76,13 @@ test("stdio MCP handshake exposes and calls only implemented tools", { timeout: 
     assert.equal(fetched.markdown, detail.contents[0].text);
     const referenceTool = tools.find((tool) => tool.name === "spine_search_reference");
     assert.equal(referenceTool.inputSchema.properties.query.type, "string");
+    for (const name of ["spine_set_curve", "spine_replace_keyframe"]) {
+      const schema = tools.find((tool) => tool.name === name).inputSchema;
+      assert.deepEqual(schema.properties.controls, {
+        type: "array", items: { type: "number" }, minItems: 4, maxItems: 4,
+      });
+      assert.ok(!schema.required.includes("controls"));
+    }
 
     const status = parseTextResult(await client.callTool({ name: "spine_status", arguments: {} }));
     assert.equal(status.name, SERVER_NAME);
@@ -415,6 +422,26 @@ test("inspect, validate, stage, and commit a full animation retime", { timeout: 
     assert.equal(curve.changeCount, 1);
     parseTextResult(await client.callTool({ name: "spine_commit_edit", arguments: { editId: curve.editId } }));
     assert.deepEqual(JSON.parse(await readFile(path, "utf8")).animations.walk.bones.arm.rotate[0].curve, [0.25, 0, 0.75, 0]);
+
+    const preset = parseTextResult(await client.callTool({ name: "spine_set_curve", arguments: {
+      path, animation: "walk", bone: "arm", timelineType: "rotate", time: 0, mode: "ease_in_out",
+    } }));
+    assert.deepEqual(preset.changes[0].after, [0.42, 0, 0.58, 0]);
+    const replaced = parseTextResult(await client.callTool({ name: "spine_replace_keyframe", arguments: {
+      path, animation: "walk", bone: "arm", timelineType: "rotate", time: 0,
+      values: { value: 5 }, easing: "ease_out",
+    } }));
+    assert.equal(replaced.summaries[0].kind, "replace_keyframe");
+    assert.ok(replaced.netChanges.some((change) => change.path === "/animations/walk/bones/arm/rotate/0/value"
+      && change.after === 5));
+    assert.ok(replaced.changes.some((change) => change.path === "/animations/walk/bones/arm/rotate/0/curve"
+      && JSON.stringify(change.after) === JSON.stringify([0, 5, 0.58, 0])));
+    const batchedReplacement = parseTextResult(await client.callTool({ name: "spine_preview_edit", arguments: {
+      path, operations: [{ kind: "replace_keyframe", animation: "walk", bone: "arm",
+        timelineType: "rotate", time: 0, values: { value: 5 }, easing: "ease_out" }],
+    } }));
+    assert.equal(batchedReplacement.summaries[0].kind, "replace_keyframe");
+    assert.equal(JSON.parse(await readFile(path, "utf8")).animations.walk.bones.arm.rotate[0].value, 0);
 
     const key = parseTextResult(await client.callTool({ name: "spine_set_keyframe", arguments: {
       path, animation: "walk", selector: { section: "bones", target: "arm", timelineType: "translate" },

@@ -717,8 +717,8 @@ export function createServer(): McpServer {
     bone: z.string().min(1),
     timelineType: z.enum(["rotate", "translate", "scale", "shear"]),
     time: z.number().finite().nonnegative(),
-    mode: z.enum(["linear", "stepped", "bezier"]),
-    controls: z.tuple([z.number().finite(), z.number().finite(), z.number().finite(), z.number().finite()]).optional(),
+    mode: z.enum(["linear", "stepped", "bezier", "ease_in", "ease_out", "ease_in_out"]),
+    controls: z.array(z.number().finite()).length(4).optional(),
   });
   const keyframeSelectorSchema = z.object({
     section: z.enum(["bones", "slots", "ik", "transform", "path", "physics", "slider", "attachments", "deform", "events", "drawOrder"]),
@@ -732,6 +732,13 @@ export function createServer(): McpServer {
     kind: z.literal("set_keyframe"), animation: z.string().min(1), selector: keyframeSelectorSchema,
     time: z.number().finite().nonnegative(), values: z.record(z.string(), z.unknown()),
     curvePolicy: z.enum(["reject", "linearize"]).optional(),
+  });
+  const replaceKeyframeOperationSchema = z.object({
+    kind: z.literal("replace_keyframe"), animation: z.string().min(1), bone: z.string().min(1),
+    timelineType: z.enum(["rotate", "translate", "scale", "shear"]),
+    time: z.number().finite().nonnegative(), values: z.record(z.string(), z.unknown()),
+    easing: curveOperationSchema.shape.mode,
+    controls: curveOperationSchema.shape.controls,
   });
   const deleteKeyframeOperationSchema = z.object({
     kind: z.literal("delete_keyframe"), animation: z.string().min(1), selector: keyframeSelectorSchema,
@@ -881,7 +888,7 @@ export function createServer(): McpServer {
     sourceAnimation: z.string().min(1), newAnimation: z.string().min(1),
     maps: retargetMapsSchema.optional() });
   const operationSchema = z.discriminatedUnion("kind", [retimeOperationSchema, bulkOperationSchema, loopOperationSchema,
-    curveOperationSchema, setKeyframeOperationSchema, deleteKeyframeOperationSchema,
+    curveOperationSchema, setKeyframeOperationSchema, replaceKeyframeOperationSchema, deleteKeyframeOperationSchema,
     upsertBoneOperationSchema, removeBoneOperationSchema, upsertSlotOperationSchema,
     removeSlotOperationSchema, reorderSlotsOperationSchema, renameElementOperationSchema,
     cleanupCurvesOperationSchema, upsertConstraintOperationSchema,
@@ -1302,7 +1309,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_set_curve",
     {
-      description: "Stage linear, stepped, or normalized Bézier easing on an existing bone transform key.",
+      description: "Stage outgoing easing on an existing bone transform key. Use mode linear, stepped, ease_in, ease_out, or ease_in_out without controls; mode bezier requires four numeric normalized controls [x1,y1,x2,y2].",
       inputSchema: z.object({ path: z.string().min(1), ...curveOperationSchema.omit({ kind: true }).shape,
         requestId: z.string().min(1).max(128).optional() }),
     },
@@ -1332,6 +1339,18 @@ export function createServer(): McpServer {
     },
     async ({ path, requestId, ...operation }) => runTool(async () => ({
       ...(await edits.preview(path, [{ kind: "set_keyframe", ...operation }], requestId)),
+    })),
+  );
+
+  server.registerTool(
+    "spine_replace_keyframe",
+    {
+      description: "Stage one existing bone transform key's value and outgoing easing together. Requires an exact key with a next key. Changing a value clears the incoming Bézier segment; the selected easing replaces the outgoing segment. Presets need no controls.",
+      inputSchema: z.object({ path: z.string().min(1), ...replaceKeyframeOperationSchema.omit({ kind: true }).shape,
+        requestId: z.string().min(1).max(128).optional() }),
+    },
+    async ({ path, requestId, ...operation }) => runTool(async () => ({
+      ...(await edits.preview(path, [{ kind: "replace_keyframe", ...operation }], requestId)),
     })),
   );
 

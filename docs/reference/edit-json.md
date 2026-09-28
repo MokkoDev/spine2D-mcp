@@ -21,6 +21,6 @@ To create a clip and add two keys in one stage, call `spine_preview_edit`:
 }
 ```
 
-Inspect targets first with `spine_inspect_project` and `spine_inspect_animation`. For a single existing key, `spine_set_keyframe`, `spine_delete_keyframe`, and `spine_set_curve` are more direct. For multiple timelines or clips, see `spine_bulk_keys`. Operation shapes and supported timeline values are in [FUNCTIONS.md](../../FUNCTIONS.md).
+Inspect targets first with `spine_inspect_project` and `spine_inspect_animation`. For one existing bone key's value and outgoing easing, use `spine_replace_keyframe` with `values` and an `easing` preset such as `ease_out`; it clears an affected incoming Bézier curve in the same stage. For curve-only edits, use `spine_set_curve` with `mode: "ease_in"`, `"ease_out"`, or `"ease_in_out"` without controls. `spine_set_keyframe` handles inserts and other timeline types; `spine_delete_keyframe` removes a key. For multiple timelines or clips, see `spine_bulk_keys`. Operation shapes and supported timeline values are in [FUNCTIONS.md](../../FUNCTIONS.md).
 
 Next: [Preview and commit](preview-commit.md).

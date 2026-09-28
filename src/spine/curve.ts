@@ -11,9 +11,17 @@ export interface SetCurveOperation {
   bone: string;
   timelineType: "rotate" | "translate" | "scale" | "shear";
   time: number;
-  mode: "linear" | "stepped" | "bezier";
-  controls?: [number, number, number, number];
+  mode: CurveMode;
+  controls?: number[];
 }
+
+export type CurveMode = "linear" | "stepped" | "bezier" | "ease_in" | "ease_out" | "ease_in_out";
+
+export const EASING_PRESETS = {
+  ease_in: [0.42, 0, 1, 1],
+  ease_out: [0, 0, 0.58, 1],
+  ease_in_out: [0.42, 0, 0.58, 1],
+} as const;
 
 export interface CurveSummary {
   kind: "set_curve";
@@ -72,8 +80,11 @@ export function setCurveText(document: SpineDocument, operation: SetCurveOperati
   if (nextTime <= operation.time) throw new SpineError("CURVE_TIME_CONFLICT", "The next key must be later to define an interpolation segment.");
   const channelList = channels(timeline, key, next);
   let after: string | number[] | undefined;
-  if (operation.mode === "bezier") {
-    const controls = operation.controls;
+  if (operation.mode === "bezier" || operation.mode in EASING_PRESETS) {
+    if (operation.mode !== "bezier" && operation.controls !== undefined) {
+      throw new SpineError("INVALID_CURVE_CONTROLS", "Named easing presets do not accept controls.");
+    }
+    const controls = operation.mode === "bezier" ? operation.controls : EASING_PRESETS[operation.mode as keyof typeof EASING_PRESETS];
     if (!controls || controls.length !== 4 || !controls.every((value) => typeof value === "number" && Number.isFinite(value))
       || controls[0] < 0 || controls[0] > controls[2] || controls[2] > 1) {
       throw new SpineError("INVALID_CURVE_CONTROLS", "Bézier controls must be [x1, y1, x2, y2], with finite values and 0 ≤ x1 ≤ x2 ≤ 1.");

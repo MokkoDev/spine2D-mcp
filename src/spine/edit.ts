@@ -14,6 +14,7 @@ import { setCurveText, type CurveSummary, type SetCurveOperation } from "./curve
 import { parseDocument, readDocument, requireEditableVersion, sha256, type SpineDocument } from "./document.js";
 import { SpineError } from "./errors.js";
 import { deleteKeyframeText, setKeyframeText, type DeleteKeyframeOperation, type KeyframeSummary, type SetKeyframeOperation } from "./keyframe.js";
+import { replaceKeyframeText, type ReplaceKeyframeOperation, type ReplaceKeyframeSummary } from "./replace-keyframe.js";
 import { makeLoopText, type MakeLoopOperation, type LoopSummary } from "./loop.js";
 import { removeAnimationText, removeConstraintText, removeEventText,
   type RemoveOperation, type RemoveSummary } from "./remove.js";
@@ -34,7 +35,7 @@ export interface RetimeAnimationOperation {
   scale: number;
 }
 
-export type EditOperation = RetimeAnimationOperation | BulkKeysOperation | MakeLoopOperation | SetCurveOperation
+export type EditOperation = RetimeAnimationOperation | BulkKeysOperation | MakeLoopOperation | SetCurveOperation | ReplaceKeyframeOperation
   | SetKeyframeOperation | DeleteKeyframeOperation | RigOperation | CloneAnimationOperation | ReverseBoneAnimationOperation
   | RetargetAnimationOperation | AttachmentOperation | RemoveOperation | StructureOperation | RenameElementOperation
   | CleanupCurvesOperation | TransformAnimationOperation;
@@ -55,7 +56,7 @@ export interface RetimeSummary {
   curveControls: number;
 }
 
-export type EditSummary = RetimeSummary | BulkSummary | LoopSummary | CurveSummary | KeyframeSummary
+export type EditSummary = RetimeSummary | BulkSummary | LoopSummary | CurveSummary | KeyframeSummary | ReplaceKeyframeSummary
   | RigSummary | CloneAnimationSummary | ReverseBoneAnimationSummary | RetargetSummary
   | AttachmentSummary | RemoveAttachmentSummary | RemoveSummary | StructureSummary | RenameSummary
   | CleanupCurvesSummary | TransformAnimationSummary;
@@ -442,6 +443,11 @@ export class EditStore {
         summaries.push(result.summary);
       } else if (operation.kind === "set_keyframe") {
         const result = setKeyframeText(current, operation);
+        text = result.text;
+        allChanges.push(...result.changes);
+        summaries.push(result.summary);
+      } else if (operation.kind === "replace_keyframe") {
+        const result = replaceKeyframeText(current, operation);
         text = result.text;
         allChanges.push(...result.changes);
         summaries.push(result.summary);
