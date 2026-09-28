@@ -4,6 +4,9 @@ export const SERVER_VERSION = "0.31.1";
 export type ToolStatus = "implemented" | "planned";
 export type ToolBackend = "server" | "json" | "cli" | "json+cli";
 
+export const TOOL_AREAS = ["Server", "Project understanding", "Project and files", "Skeleton",
+  "Art and rig", "Animation", "Animation workflow", "Visual review", "Production"] as const;
+
 export interface ToolCapability {
   name: string;
   status: ToolStatus;

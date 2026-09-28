@@ -75,6 +75,10 @@ for (const version of ["4.2", "4.3"]) test(`MCP round trips a Spine ${version} p
     assert.equal(manifest.assets.copied, true);
     assert.equal((await readFile(projectPath)).equals(originalProject), true);
     assert.deepEqual(validateDocument(await readDocument(result.reexported.path)), []);
+    const afterCheck = await client.callTool({ name: "spine_check_animation", arguments: {
+      path: result.reexported.path, animation: "turn", previewId: result.afterPreviewId,
+    } });
+    assert.equal(afterCheck.isError, undefined, afterCheck.content?.[0]?.text);
     const sheet = await client.readResource({ uri: result.contactSheetUri });
     assert.equal(sheet.contents[0].mimeType, "image/png");
     assert.ok(sheet.contents[0].blob?.length > 0);

@@ -9,7 +9,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { PNG } from "pngjs";
 
-import { SERVER_NAME, SERVER_VERSION, TOOL_CATALOG } from "../dist/catalog.js";
+import { SERVER_NAME, SERVER_VERSION, TOOL_AREAS, TOOL_CATALOG } from "../dist/catalog.js";
 
 const serverPath = fileURLToPath(new URL("../startup.sh", import.meta.url));
 
@@ -61,6 +61,8 @@ test("stdio MCP handshake exposes and calls only implemented tools", { timeout: 
         .map((tool) => tool.name)
         .sort(),
     );
+    assert.match(client.getInstructions(), /spine_workflow_guide/);
+    assert.match(client.getInstructions(), /spine_preview_edit/);
 
     const status = parseTextResult(await client.callTool({ name: "spine_status", arguments: {} }));
     assert.equal(status.name, SERVER_NAME);
@@ -74,9 +76,23 @@ test("stdio MCP handshake exposes and calls only implemented tools", { timeout: 
       await client.callTool({ name: "spine_capabilities", arguments: {} }),
     );
     assert.deepEqual(capabilities.tools, TOOL_CATALOG);
+    assert.deepEqual([...new Set(TOOL_CATALOG.map((tool) => tool.area))].sort(), [...TOOL_AREAS].sort());
     assert.ok(capabilities.tools.some((tool) => tool.status === "planned"));
+    assert.ok(capabilities.areas.some((area) => area.name === "Visual review" && area.count > 0));
+    const visualTools = parseTextResult(await client.callTool({ name: "spine_capabilities", arguments: {
+      area: "Visual review", status: "implemented",
+    } }));
+    assert.ok(visualTools.tools.length > 0);
+    assert.ok(visualTools.tools.every((tool) => tool.area === "Visual review" && tool.status === "implemented"));
+    const poseTools = parseTextResult(await client.callTool({ name: "spine_capabilities", arguments: { query: "pose" } }));
+    assert.ok(poseTools.tools.some((tool) => tool.name === "spine_save_pose"));
+    assert.ok(poseTools.tools.every((tool) => `${tool.name} ${tool.purpose} ${tool.area}`.toLowerCase().includes("pose")));
+    const menu = parseTextResult(await client.callTool({ name: "spine_workflow_guide", arguments: { goal: "choose" } }));
+    assert.ok(menu.workflows.every((item) => item.primaryTools.length > 0
+      && item.primaryTools.every((name) => tools.some((tool) => tool.name === name))));
     const guide = parseTextResult(await client.callTool({ name: "spine_workflow_guide", arguments: { goal: "round_trip" } }));
     assert.equal(guide.goal, "round_trip");
+    assert.deepEqual(guide.primaryTools, ["spine_round_trip_edit"]);
     assert.ok(guide.steps.some((step) => step.includes("spine_round_trip_edit")));
   } finally {
     await client.close();
@@ -400,6 +416,8 @@ test("PNG preview invokes configured Spine CLI and exposes a frame resource", { 
   try {
     const result = parseTextResult(await client.callTool({ name: "spine_render_preview", arguments: { inputPath, settingsPath, outputDir: directory, animation: "walk", frameStart: 2, frameEnd: 4, display: ":42" } }));
     assert.equal(result.frameCount, 1);
+    assert.equal(result.source.sourcePath, inputPath);
+    assert.match(result.source.sourceHash, /^[0-9a-f]{64}$/);
     assert.equal(result.cli.exitCode, 0);
     const resource = await client.readResource({ uri: result.frames[0].uri });
     assert.equal(resource.contents[0].mimeType, "image/png");
@@ -412,11 +430,13 @@ test("PNG preview invokes configured Spine CLI and exposes a frame resource", { 
     assert.equal(sheetPng.height, sheet.height);
     const analysis = parseTextResult(await client.callTool({ name: "spine_analyze_preview", arguments: { previewId: result.previewId } }));
     assert.equal(analysis.frames[0].visiblePixels, 1);
+    assert.deepEqual(analysis.source, result.source);
     assert.deepEqual(analysis.hints, []);
     const combined = parseTextResult(await client.callTool({ name: "spine_check_animation", arguments: {
       path: inputPath, animation: "walk", previewId: result.previewId,
     } }));
     assert.equal(combined.visual.previewId, result.previewId);
+    assert.equal(combined.checkedSource.sha256, result.source.sourceHash);
     assert.ok(combined.checksPerformed.includes("blank rendered frames"));
     const motion = parseTextResult(await client.callTool({ name: "spine_analyze_motion_quality", arguments: {
       path: inputPath, animation: "walk", previewId: result.previewId,
@@ -432,6 +452,46 @@ test("PNG preview invokes configured Spine CLI and exposes a frame resource", { 
     } });
     assert.equal(mismatched.isError, true);
     assert.equal(JSON.parse(mismatched.content[0].text).code, "PREVIEW_ANIMATION_MISMATCH");
+    const otherPath = join(directory, "other.json");
+    await writeFile(otherPath, JSON.stringify(projectData));
+    for (const name of ["spine_check_animation", "spine_analyze_motion_quality"]) {
+      const wrongFile = await client.callTool({ name, arguments: {
+        path: otherPath, animation: "walk", previewId: result.previewId,
+      } });
+      assert.equal(wrongFile.isError, true);
+      assert.equal(JSON.parse(wrongFile.content[0].text).code, "PREVIEW_SOURCE_MISMATCH");
+    }
+    projectData.bones[1].length = 42;
+    await writeFile(inputPath, JSON.stringify(projectData));
+    const changedSource = await client.callTool({ name: "spine_check_animation", arguments: {
+      path: inputPath, animation: "walk", previewId: result.previewId,
+    } });
+    assert.equal(changedSource.isError, true);
+    assert.equal(JSON.parse(changedSource.content[0].text).code, "PREVIEW_SOURCE_MISMATCH");
+  } finally {
+    await client.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("PNG preview rejects a source changed during rendering", { timeout: 20_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine2d-mcp-preview-source-"));
+  const inputPath = join(directory, "rig.json");
+  const settingsPath = join(directory, "png.export.json");
+  const mockCli = join(directory, "fake-spine");
+  const png = solidPng([255, 255, 255, 255]);
+  await writeFile(inputPath, JSON.stringify(fixture));
+  await writeFile(settingsPath, JSON.stringify({ class: "export-png" }));
+  await writeFile(mockCli, `#!/usr/bin/env node\nconst fs=require("node:fs");const path=require("node:path");const args=process.argv.slice(2);const input=args[args.indexOf("--input")+1];const output=args[args.indexOf("--output")+1];fs.appendFileSync(input,"\\n");fs.writeFileSync(path.join(output,"frame.png"),Buffer.from("${png}","base64"));\n`);
+  await chmod(mockCli, 0o755);
+  const client = await connect({ SPINE_CLI_PATH: mockCli });
+  try {
+    const result = await client.callTool({ name: "spine_render_preview", arguments: {
+      inputPath, settingsPath, outputDir: directory, animation: "walk",
+    } });
+    assert.equal(result.isError, true);
+    assert.equal(JSON.parse(result.content[0].text).code, "PREVIEW_SOURCE_CHANGED");
+    assert.ok(!(await readdir(directory)).some((name) => name.startsWith("spine-preview-")));
   } finally {
     await client.close();
     await rm(directory, { recursive: true, force: true });
@@ -481,7 +541,31 @@ test("staged edit renders and compares before/after without changing source", { 
     const staged = parseTextResult(await client.callTool({ name: "spine_render_staged_edit", arguments: { editId: preview.editId, settingsPath, outputDir: directory, animation: "walk" } }));
     assert.equal(staged.frameCount, 2);
     assert.equal(staged.afterHash, preview.afterHash);
+    assert.deepEqual(staged.source, { kind: "stage", editId: preview.editId,
+      sourcePath: path, afterHash: preview.afterHash });
+    const missingEditId = await client.callTool({ name: "spine_check_animation", arguments: {
+      path, animation: "walk", previewId: staged.previewId,
+    } });
+    assert.equal(missingEditId.isError, true);
+    assert.equal(JSON.parse(missingEditId.content[0].text).code, "PREVIEW_SOURCE_MISMATCH");
+    const stagedCheck = parseTextResult(await client.callTool({ name: "spine_check_animation", arguments: {
+      path, animation: "walk", previewId: staged.previewId, editId: preview.editId,
+    } }));
+    assert.equal(stagedCheck.motionDuration, 1);
+    assert.equal(stagedCheck.visual.editId, preview.editId);
+    assert.equal(stagedCheck.checkedSource.sha256, preview.afterHash);
+    const stagedMotion = parseTextResult(await client.callTool({ name: "spine_analyze_motion_quality", arguments: {
+      path, animation: "walk", previewId: staged.previewId, editId: preview.editId,
+    } }));
+    assert.equal(stagedMotion.motionDuration, 1);
+    assert.equal(stagedMotion.checkedSource.editId, preview.editId);
     const comparison = parseTextResult(await client.callTool({ name: "spine_compare_previews", arguments: { editId: preview.editId, settingsPath, outputDir: directory, animation: "walk", samples: 2 } }));
+    assert.ok(comparison.beforePreviewId);
+    assert.ok(comparison.afterPreviewId);
+    const beforeCheck = parseTextResult(await client.callTool({ name: "spine_check_animation", arguments: {
+      path, animation: "walk", previewId: comparison.beforePreviewId,
+    } }));
+    assert.equal(beforeCheck.motionDuration, 0.5);
     assert.equal(comparison.pairs.length, 2);
     assert.equal(comparison.pairs[0].progress, 0);
     assert.equal(comparison.pairs[1].progress, 1);

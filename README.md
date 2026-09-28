@@ -35,3 +35,7 @@ npm run dev
 ```
 
 The server waits for an MCP client on standard input. To run the built version, use `npm run build` followed by `./startup.sh`.
+
+## Choose a tool
+
+Call `spine_workflow_guide` with `goal: "choose"` for task-based entry points. Its choices cover inspection, new projects, existing `.spine` round trips, JSON editing, pose reuse, motion review, and batch exports. To find a specialized function, filter `spine_capabilities` by `area` or `query`. Use a named edit tool for one change or `spine_preview_edit` for several related changes; both stage the result for review before `spine_commit_edit` saves it.

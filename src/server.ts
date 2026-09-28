@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
@@ -8,6 +8,7 @@ import * as z from "zod/v4";
 import {
   SERVER_NAME,
   SERVER_VERSION,
+  TOOL_AREAS,
   TOOL_CATALOG,
   TOOL_NAMES,
 } from "./catalog.js";
@@ -30,7 +31,7 @@ import { deleteExportProfile, getExportProfile, listExportProfiles, runExportPro
 import { analyzePreview, checkAnimation } from "./spine/quality.js";
 import { validateDocument } from "./spine/validate.js";
 import { createFrameContactSheet, createVisualComparison } from "./spine/visual.js";
-import { workflowGuide } from "./workflow-guide.js";
+import { SERVER_INSTRUCTIONS, workflowGuide } from "./workflow-guide.js";
 
 function jsonResult(value: Record<string, unknown>) {
   return {
@@ -58,40 +59,83 @@ export function createServer(): McpServer {
   const server = new McpServer({
     name: SERVER_NAME,
     version: SERVER_VERSION,
-  });
+  }, { instructions: SERVER_INSTRUCTIONS });
   const edits = new EditStore();
   const batches = new BatchJobStore(edits);
-  const previews = new Map<string, string[]>();
-  const previewAnimations = new Map<string, string>();
+  type PreviewSource = { kind: "file"; sourcePath: string; sourceHash: string }
+    | { kind: "derived"; sourcePath: string; sourceHash: string; renderPath: string; renderHash: string }
+    | { kind: "stage"; editId: string; sourcePath: string; afterHash: string };
+  type PreviewEntry = { frames: string[]; animation?: string; source?: PreviewSource };
+  const previews = new Map<string, PreviewEntry>();
   const inventories = new Map<string, Record<string, unknown>>();
   const poses = new Map<string, SavedBonePose>();
   const fullPoses = new Map<string, SavedPose>();
   const meshPoses = new Map<string, SavedMeshPose>();
   const players = new Map<string, string>();
 
-  function publishFrames(paths: string[]): string {
+  async function hashFile(path: string): Promise<string> {
+    let bytes: Buffer;
+    try { bytes = await readFile(path); }
+    catch { throw new SpineError("INPUT_NOT_FOUND", `Preview input cannot be read: ${path}.`); }
+    return createHash("sha256").update(bytes).digest("hex");
+  }
+
+  async function verifyRenderedInput(result: Awaited<ReturnType<typeof renderPreview>>,
+    sourcePath: string, sourceHash: string): Promise<void> {
+    const actualHash = await hashFile(sourcePath).catch(() => undefined);
+    if (actualHash === sourceHash) return;
+    await rm(result.previewDir, { recursive: true, force: true }).catch(() => undefined);
+    throw new SpineError("PREVIEW_SOURCE_CHANGED", "The preview input changed while Spine rendered it.", { sourcePath });
+  }
+
+  function publishFrames(paths: string[], animation?: string, source?: PreviewSource): string {
     const previewId = randomUUID();
-    previews.set(previewId, paths);
+    previews.set(previewId, { frames: paths, animation, source });
     if (previews.size > 20) {
       const expired = previews.keys().next().value!;
       previews.delete(expired);
-      previewAnimations.delete(expired);
     }
     return previewId;
   }
 
-  function publishPreview(result: Awaited<ReturnType<typeof renderPreview>>) {
-    const previewId = publishFrames(result.frames.map((frame) => frame.path));
-    previewAnimations.set(previewId, result.animation);
+  function publishPreview(result: Awaited<ReturnType<typeof renderPreview>>, source: PreviewSource) {
+    const previewId = publishFrames(result.frames.map((frame) => frame.path), result.animation, source);
     return {
       previewId,
       animation: result.animation,
+      source,
       previewDir: result.previewDir,
       frameCount: result.frames.length,
       frames: result.frames.slice(0, 100).map((frame, index) => ({ name: frame.name, uri: `spine-preview://${previewId}/${index}` })),
       framesTruncated: result.frames.length > 100,
       cli: { executable: result.cli.executable, exitCode: result.cli.exitCode, stdout: result.cli.stdout.slice(0, 4000), stderr: result.cli.stderr.slice(0, 4000) },
     };
+  }
+
+  async function previewForCheck(path: string, animation: string, previewId?: string, editId?: string) {
+    const snapshot = editId ? edits.snapshot(editId) : undefined;
+    if (snapshot && resolve(path) !== snapshot.sourcePath) {
+      throw new SpineError("PREVIEW_SOURCE_MISMATCH", "The supplied path is not the staged edit's source path.",
+        { sourcePath: snapshot.sourcePath, suppliedPath: resolve(path), editId });
+    }
+    const document = snapshot ? parseDocument(snapshot.sourcePath, snapshot.afterText) : await readDocument(path);
+    if (!previewId) return { document, frames: undefined };
+    const preview = previews.get(previewId);
+    if (!preview?.animation) throw new SpineError("PREVIEW_NOT_FOUND", `Preview ${previewId} is unavailable as a rendered animation in this server session.`);
+    if (preview.animation !== animation) {
+      throw new SpineError("PREVIEW_ANIMATION_MISMATCH", `Preview ${previewId} was not rendered for animation ${animation}.`);
+    }
+    const source = preview.source;
+    const matchesFile = !snapshot && (source?.kind === "file" || source?.kind === "derived")
+      && source.sourcePath === document.path && source.sourceHash === document.hash;
+    const matchesStage = source?.kind === "stage" && source.sourcePath === document.path
+      && source.afterHash === document.hash && (!snapshot || source.editId === editId);
+    if (!matchesFile && !matchesStage) {
+      throw new SpineError("PREVIEW_SOURCE_MISMATCH",
+        "The preview was rendered from a different skeleton or version. Use its source JSON or supply the matching staged editId.",
+        { previewId, source, suppliedPath: document.path, suppliedHash: document.hash, ...(editId ? { editId } : {}) });
+    }
+    return { document, frames: preview.frames };
   }
 
   async function withStageFiles<T>(editId: string, action: (beforePath: string, afterPath: string, snapshot: ReturnType<EditStore["snapshot"]>) => Promise<T>): Promise<T> {
@@ -132,18 +176,26 @@ export function createServer(): McpServer {
 
   server.registerTool(
     TOOL_NAMES.workflowGuide,
-    { description: "Start here: choose a short Spine authoring, review, round-trip, or export workflow.",
-      inputSchema: z.object({ goal: z.enum(["choose", "round_trip", "new_motion", "edit_json", "review_motion", "batch_export"]).optional() }) },
+    { description: "Start here when a Spine task could use several tools. Choose by source and outcome; get the recommended entry tools and steps.",
+      inputSchema: z.object({ goal: z.enum(["choose", "inspect", "create_project", "round_trip", "new_motion", "edit_json", "reuse_pose", "review_motion", "batch_export"]).optional() }) },
     async ({ goal }) => runTool(async () => workflowGuide(goal)),
   );
 
   server.registerTool(
     TOOL_NAMES.capabilities,
     {
-      description: "List implemented and planned Spine2D MCP tools.",
-      inputSchema: z.object({}),
+      description: "Find specialized Spine tools by category or search term. Use spine_workflow_guide for an end-to-end task.",
+      inputSchema: z.object({ area: z.enum(TOOL_AREAS).optional(),
+        query: z.string().trim().min(1).max(100).optional(), status: z.enum(["implemented", "planned"]).optional() }),
     },
-    async () => jsonResult({ tools: TOOL_CATALOG }),
+    async ({ area, query, status }) => {
+      const needle = query?.toLowerCase();
+      const tools = TOOL_CATALOG.filter((tool) => (!area || tool.area === area)
+        && (!status || tool.status === status)
+        && (!needle || `${tool.name} ${tool.purpose} ${tool.area}`.toLowerCase().includes(needle)));
+      return jsonResult({ tools, areas: TOOL_AREAS.map((name) => ({ name,
+        count: TOOL_CATALOG.filter((tool) => tool.area === name && tool.status === "implemented").length })) });
+    },
   );
 
   server.registerTool(
@@ -220,7 +272,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_check_animation",
     {
-      description: "Check a clip for structural issues and optionally analyze frames from a rendered preview.",
+      description: "Review one animation's timeline structure; optionally combine it with an existing previewId. Use spine_analyze_motion_quality for foot contact regions.",
       inputSchema: z.object({
         path: z.string().min(1),
         animation: z.string().min(1),
@@ -230,30 +282,29 @@ export function createServer(): McpServer {
         deformThreshold: z.number().finite().positive().optional(),
         checkAssets: z.boolean().optional(),
         previewId: z.uuid().optional(),
+        editId: z.uuid().optional(),
         ...previewAnalysisOptions,
       }),
     },
-    async ({ path, animation, previewId, maxFrames, alphaThreshold, areaJumpRatio, fixedCanvas, edgeMargin, ...options }) => runTool(async () => {
-      const structural = await checkAnimation(await readDocument(path), animation, options);
+    async ({ path, animation, previewId, editId, maxFrames, alphaThreshold, areaJumpRatio, fixedCanvas, edgeMargin, ...options }) => runTool(async () => {
+      const { document, frames } = await previewForCheck(path, animation, previewId, editId);
+      const structural = await checkAnimation(document, animation, options);
       if (!previewId) return structural;
-      const frames = previews.get(previewId);
-      if (!frames) throw new SpineError("PREVIEW_NOT_FOUND", `Preview ${previewId} is unavailable in this server session.`);
-      if (previewAnimations.get(previewId) !== animation) {
-        throw new SpineError("PREVIEW_ANIMATION_MISMATCH", `Preview ${previewId} was not rendered for animation ${animation}.`);
-      }
-      const visual = await analyzePreview(frames, { maxFrames, alphaThreshold, areaJumpRatio, fixedCanvas, edgeMargin });
-      return { ...structural, checksPerformed: [...structural.checksPerformed, ...visual.checksPerformed],
-        hints: [...structural.hints, ...visual.hints], visual: { previewId, ...visual } };
+      const visual = await analyzePreview(frames!, { maxFrames, alphaThreshold, areaJumpRatio, fixedCanvas, edgeMargin });
+      return { ...structural, checkedSource: { path: document.path, sha256: document.hash,
+        ...(editId ? { editId } : {}) },
+        checksPerformed: [...structural.checksPerformed, ...visual.checksPerformed],
+        hints: [...structural.hints, ...visual.hints], visual: { previewId, ...(editId ? { editId } : {}), ...visual } };
     }),
   );
 
   server.registerTool(
     TOOL_NAMES.analyzeMotionQuality,
     {
-      description: "Combine structural animation checks with review hints for visible foot movement in selected rendered contact regions.",
+      description: "Review one animation and measure visible foot drift in selected contact regions of a rendered preview. Use spine_check_animation for structural checks alone.",
       inputSchema: z.object({ path: z.string().min(1), animation: z.string().min(1),
         loop: z.boolean().optional(), deformThreshold: z.number().finite().positive().optional(),
-        checkAssets: z.boolean().optional(), previewId: z.uuid().optional(),
+        checkAssets: z.boolean().optional(), previewId: z.uuid().optional(), editId: z.uuid().optional(),
         contactRegions: z.array(z.object({ name: z.string().min(1),
           fromFrame: z.number().int().nonnegative(), toFrame: z.number().int().nonnegative(),
           x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1),
@@ -262,20 +313,18 @@ export function createServer(): McpServer {
         alphaThreshold: z.number().int().min(1).max(255).optional(),
         minimumVisiblePixels: z.number().int().min(1).max(10000).optional() }),
     },
-    async ({ path, animation, previewId, contactRegions, alphaThreshold, minimumVisiblePixels, ...options }) => runTool(async () => {
-      const structural = await checkAnimation(await readDocument(path), animation, options);
+    async ({ path, animation, previewId, editId, contactRegions, alphaThreshold, minimumVisiblePixels, ...options }) => runTool(async () => {
       if (contactRegions && !previewId) {
         throw new SpineError("PREVIEW_REQUIRED", "Contact regions require a rendered previewId.");
       }
+      const { document, frames } = await previewForCheck(path, animation, previewId, editId);
+      const structural = await checkAnimation(document, animation, options);
       if (!previewId) return structural;
-      const frames = previews.get(previewId);
-      if (!frames) throw new SpineError("PREVIEW_NOT_FOUND", `Preview ${previewId} is unavailable in this server session.`);
-      if (previewAnimations.get(previewId) !== animation) {
-        throw new SpineError("PREVIEW_ANIMATION_MISMATCH", `Preview ${previewId} was not rendered for animation ${animation}.`);
-      }
-      if (!contactRegions) return { ...structural, previewId };
-      const contact = await analyzeFootContacts(frames, contactRegions, { alphaThreshold, minimumVisiblePixels });
+      const checkedSource = { path: document.path, sha256: document.hash, ...(editId ? { editId } : {}) };
+      if (!contactRegions) return { ...structural, previewId, checkedSource };
+      const contact = await analyzeFootContacts(frames!, contactRegions, { alphaThreshold, minimumVisiblePixels });
       return { ...structural,
+        checkedSource,
         checksPerformed: [...structural.checksPerformed, "visible foot drift in selected contact regions"],
         checksUnavailable: structural.checksUnavailable.filter((check) => check !== "foot sliding"),
         hints: [...structural.hints, ...contact.hints],
@@ -287,13 +336,14 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_analyze_preview",
     {
-      description: "Analyze rendered PNG preview frames for blanks, sudden visible-area changes, and optional fixed-canvas edge contact.",
+      description: "Analyze an existing previewId's PNG frames for blanks and visible-area changes. Use spine_check_animation to combine this with timeline diagnostics.",
       inputSchema: z.object({ previewId: z.uuid(), ...previewAnalysisOptions }),
     },
     async ({ previewId, ...options }) => runTool(async () => {
-      const frames = previews.get(previewId);
-      if (!frames) throw new SpineError("PREVIEW_NOT_FOUND", `Preview ${previewId} is unavailable in this server session.`);
-      return { previewId, ...await analyzePreview(frames, options) };
+      const preview = previews.get(previewId);
+      if (!preview) throw new SpineError("PREVIEW_NOT_FOUND", `Preview ${previewId} is unavailable in this server session.`);
+      return { previewId, ...(preview.source ? { source: preview.source } : {}),
+        ...await analyzePreview(preview.frames, options) };
     }),
   );
 
@@ -372,7 +422,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_export_data",
     {
-      description: "Export Spine JSON into a new directory using saved settings with nonessential data enabled.",
+      description: "Export an existing .spine project to reimportable JSON using saved settings. Use spine_export_media for images or video.",
       inputSchema: z.object({ projectPath: z.string().min(1), settingsPath: z.string().min(1), outputDir: z.string().min(1), editorVersion: z.string().min(1), timeoutMs: z.number().int().min(1_000).max(600_000).optional() }),
     },
     async ({ projectPath, settingsPath, outputDir, editorVersion, timeoutMs }) => runTool(async () => {
@@ -384,7 +434,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_export_media",
     {
-      description: "Export Spine images or video with saved Spine settings into a new directory; requires a display and OpenGL.",
+      description: "Export images or video from a Spine project or data file using saved settings. Use spine_export_data for reimportable skeleton JSON; rendering needs a display and OpenGL.",
       inputSchema: z.object({ inputPath: z.string().min(1), settingsPath: z.string().min(1), outputDir: z.string().min(1),
         editorVersion: z.enum(["4.2", "4.3"]), fileName: z.string().min(1).optional(),
         timeoutMs: z.number().int().min(1_000).max(600_000).optional() }),
@@ -711,7 +761,7 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.batchJob,
     {
-      description: "Start, inspect, or cancel a job that stages or commits retime, loop, or curve cleanup across selected animations in several Spine JSON files.",
+      description: "Stage or commit one retime, loop, or curve cleanup operation across several JSON projects; inspect or cancel job progress. Use export profiles for repeated data/media/atlas exports.",
       inputSchema: z.object({ action: z.enum(["start", "status", "cancel"]), jobId: z.uuid().optional(),
         targets: z.array(z.object({ path: z.string().min(1), animations: z.array(z.string().min(1)).min(1).max(20) }))
           .min(1).max(20).optional(),
@@ -752,7 +802,7 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.generateMotion,
     {
-      description: "Stage a new parameterized motion clip from a compatible rig; render the staged edit to review and iterate before commit.",
+      description: "Generate a new idle, breathing, blink, walk, run, recoil, or follow-through clip from recipe parameters. Use spine_preview_edit to author specific keys instead.",
       inputSchema: z.object({ path: z.string().min(1), newAnimation: z.string().min(1),
         recipe: motionRecipeSchema, requestId: z.string().min(1).max(128).optional() }),
     },
@@ -778,7 +828,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_preview_edit",
     {
-      description: "Stage an atomic batch of Spine JSON edits and return a structured time diff and validation result.",
+      description: "Stage up to 20 coordinated edits to one skeleton JSON as one validated change. For one simple operation, use its named spine edit tool; save either result with spine_commit_edit.",
       inputSchema: z.object({
         path: z.string().min(1),
         operations: z.array(operationSchema).min(1).max(20),
@@ -791,7 +841,7 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.roundTripEdit,
     {
-      description: "Export one .spine skeleton with nonessential data, stage JSON edits, import a new project, then compare staged and re-exported data and rendered frames.",
+      description: "Use for an existing .spine project when edits need import and visual verification. Export, stage, import a new project, then compare staged and re-exported data and rendered frames.",
       inputSchema: z.object({ projectPath: z.string().min(1), dataSettingsPath: z.string().min(1),
         previewSettingsPath: z.string().min(1), outputDir: z.string().min(1),
         editorVersion: z.enum(["4.2", "4.3"]), animation: z.string().min(1),
@@ -810,8 +860,11 @@ export function createServer(): McpServer {
     },
     async (input) => runTool(async () => {
       const result = await roundTripEdit(input, edits);
-      const beforePublished = publishPreview(result.before);
-      const afterPublished = publishPreview(result.after);
+      const beforePublished = publishPreview(result.before, { kind: "file",
+        sourcePath: result.manifest.edit.sourceJsonPath, sourceHash: result.manifest.edit.sourceHash });
+      const afterPublished = publishPreview(result.after, { kind: "derived",
+        sourcePath: result.manifest.reexported.path, sourceHash: result.manifest.reexported.sha256,
+        renderPath: result.manifest.importedProject.path, renderHash: result.manifest.importedProject.sha256 });
       const comparisonId = publishFrames([...result.comparison.frames.map((frame) => frame.path),
         result.comparison.contactSheetPath]);
       const samples = result.manifest.visual.samples;
@@ -843,7 +896,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_retime_animation",
     {
-      description: "Stage a whole-animation retime. Call spine_commit_edit with the returned editId to save it.",
+      description: "Stage one whole-animation retime. Use spine_preview_edit when retiming must be combined atomically with other edits; spine_commit_edit saves the chosen stage.",
       inputSchema: z.object({ path: z.string().min(1), animation: z.string().min(1), scale: z.number().finite().positive(), requestId: z.string().min(1).max(128).optional() }),
     },
     async ({ path, animation, scale, requestId }) => runTool(async () => ({ ...(await edits.preview(path, [{ kind: "retime_animation", animation, scale }], requestId)) })),
@@ -852,7 +905,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_clone_animation",
     {
-      description: "Stage a new animation variant with every key and Bézier time control scaled and shifted together.",
+      description: "Clone one animation with all key and Bézier times scaled or shifted. Use spine_transform_animation for mirror, combine, or segment extraction.",
       inputSchema: z.object({ path: z.string().min(1), ...cloneAnimationOperationSchema.omit({ kind: true }).shape,
         requestId: z.string().min(1).max(128).optional() }),
     },
@@ -876,7 +929,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_transform_animation",
     {
-      description: "Stage a mirrored clip, a combination of disjoint timelines, a time-scaled variant, a reversed bone-motion clip, or an extracted segment.",
+      description: "Transform an animation by mirroring, combining, extracting a segment, or applying a variant transform. Use spine_clone_animation for a plain timed copy.",
       inputSchema: z.object({ path: z.string().min(1), ...transformAnimationOperationSchema.omit({ kind: true }).shape,
         requestId: z.string().min(1).max(128).optional() }),
     },
@@ -903,7 +956,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_save_bone_pose",
     {
-      description: "Capture sampled bone transform timeline values from an animation into a reusable session pose.",
+      description: "Save bone transform channels only as a session pose. Use spine_save_pose when slot attachment state matters, or spine_save_mesh_pose for mesh deforms.",
       inputSchema: z.object({ path: z.string().min(1), animation: z.string().min(1),
         time: z.number().finite().nonnegative(), name: z.string().min(1),
         bones: z.array(z.string().min(1)).min(1).max(256).optional() }),
@@ -943,7 +996,7 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.savePose,
     {
-      description: "Capture numeric bone transform and slot attachment state into a reusable session pose.",
+      description: "Save a session pose containing bone transforms and slot attachments. Use spine_save_bone_pose for bone-only data or spine_save_mesh_pose for mesh deforms.",
       inputSchema: z.object({ path: z.string().min(1), animation: z.string().min(1),
         time: z.number().finite().nonnegative(), name: z.string().min(1),
         bones: z.array(z.string().min(1)).min(1).max(256).optional(),
@@ -1217,7 +1270,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_upsert_region_attachment",
     {
-      description: "Stage creation or transform update of a region attachment in a skin and slot.",
+      description: "Stage a simple image region attachment in a skin and slot. Use spine_upsert_attachment for meshes, clipping, paths, and other attachment types.",
       inputSchema: z.object({ path: z.string().min(1), ...upsertRegionOperationSchema.omit({ kind: true }).shape,
         requestId: z.string().min(1).max(128).optional() }),
     },
@@ -1229,7 +1282,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_upsert_attachment",
     {
-      description: "Stage a typed region, mesh, linked mesh, bounding box, path, point, or clipping attachment edit.",
+      description: "Stage a typed region, mesh, linked mesh, bounding box, path, point, or clipping attachment. Use spine_upsert_region_attachment for simple image regions.",
       inputSchema: z.object({ path: z.string().min(1), ...upsertAttachmentOperationSchema.omit({ kind: true }).shape,
         requestId: z.string().min(1).max(128).optional() }),
     },
@@ -1389,7 +1442,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_render_preview",
     {
-      description: "Render a PNG animation preview using current or legacy Spine PNG export settings. Requires Spine CLI and an OpenGL display; pass display if the MCP process has no DISPLAY.",
+      description: "Render an existing JSON or .spine file to PNG frames. Use spine_render_staged_edit for an uncommitted editId; requires Spine CLI and OpenGL display.",
       inputSchema: z.object({
         inputPath: z.string().min(1),
         settingsPath: z.string().min(1),
@@ -1407,8 +1460,11 @@ export function createServer(): McpServer {
       }),
     },
     async (args) => runTool(async () => {
+      const sourcePath = resolve(args.inputPath);
+      const sourceHash = await hashFile(sourcePath);
       const result = await renderPreview(args);
-      return publishPreview(result);
+      await verifyRenderedInput(result, sourcePath, sourceHash);
+      return publishPreview(result, { kind: "file", sourcePath, sourceHash });
     }),
   );
 
@@ -1423,19 +1479,22 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_render_staged_edit",
     {
-      description: "Render the result of a staged edit before committing it, using saved Spine PNG export settings. Pass display if the MCP process has no DISPLAY.",
+      description: "Render one uncommitted editId to PNG frames. Use spine_compare_previews for before/after pairs; requires Spine CLI and OpenGL display.",
       inputSchema: z.object(stagedRenderOptions),
     },
-    async ({ editId, ...options }) => runTool(async () => withStageFiles(editId, async (_beforePath, afterPath, snapshot) => ({
-      editId, afterHash: snapshot.afterHash,
-      ...publishPreview(await renderPreview({ ...options, inputPath: afterPath })),
-    }))),
+    async ({ editId, ...options }) => runTool(async () => withStageFiles(editId, async (_beforePath, afterPath, snapshot) => {
+      const result = await renderPreview({ ...options, inputPath: afterPath });
+      await verifyRenderedInput(result, afterPath, snapshot.afterHash);
+      return { editId, afterHash: snapshot.afterHash,
+        ...publishPreview(result, { kind: "stage", editId, sourcePath: snapshot.sourcePath,
+          afterHash: snapshot.afterHash }) };
+    })),
   );
 
   server.registerTool(
     "spine_compare_previews",
     {
-      description: "Render before and after frames for a staged edit, make a contact sheet, and measure raster differences at matching normalized clip progress. Pass display if the MCP process has no DISPLAY.",
+      description: "Compare before and after PNG frames for one staged editId, with contact sheet and pixel differences. Use spine_render_staged_edit for after-only frames; requires Spine CLI and OpenGL display.",
       inputSchema: z.object({ ...stagedRenderOptions, samples: z.number().int().min(1).max(12).optional() }),
     },
     async ({ editId, samples, ...options }) => runTool(async () => withStageFiles(editId, async (beforePath, afterPath, snapshot) => {
@@ -1444,6 +1503,16 @@ export function createServer(): McpServer {
       try { after = await renderPreview({ ...options, inputPath: afterPath }); }
       catch (error) {
         await rm(before.previewDir, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      }
+      try {
+        await verifyRenderedInput(before, beforePath, snapshot.sourceHash);
+        await verifyRenderedInput(after, afterPath, snapshot.afterHash);
+      } catch (error) {
+        await Promise.all([
+          rm(before.previewDir, { recursive: true, force: true }),
+          rm(after.previewDir, { recursive: true, force: true }),
+        ]);
         throw error;
       }
       const count = Math.min(samples ?? 6, before.frames.length, after.frames.length, 12);
@@ -1466,8 +1535,10 @@ export function createServer(): McpServer {
         ]);
         throw error;
       }
-      const beforePublished = publishPreview(before);
-      const afterPublished = publishPreview(after);
+      const beforePublished = publishPreview(before, { kind: "file",
+        sourcePath: snapshot.sourcePath, sourceHash: snapshot.sourceHash });
+      const afterPublished = publishPreview(after, { kind: "stage", editId,
+        sourcePath: snapshot.sourcePath, afterHash: snapshot.afterHash });
       const comparisonId = publishFrames([...visual.frames.map((frame) => frame.path), visual.contactSheetPath]);
       const pairs = selected.map(({ progress, beforeIndex, afterIndex }, index) => ({
         progress,
@@ -1481,6 +1552,7 @@ export function createServer(): McpServer {
       }));
       return {
         editId, sourceHash: snapshot.sourceHash, afterHash: snapshot.afterHash,
+        beforePreviewId: beforePublished.previewId, afterPreviewId: afterPublished.previewId,
         pairing: "normalized-frame-progress", beforeFrameCount: before.frames.length, afterFrameCount: after.frames.length,
         beforePreviewDir: before.previewDir, afterPreviewDir: after.previewDir,
         comparisonDir: visual.directory,
@@ -1501,7 +1573,7 @@ export function createServer(): McpServer {
       inputSchema: z.object({ previewId: z.uuid(), samples: z.number().int().min(1).max(12).optional() }),
     },
     async ({ previewId, samples }) => runTool(async () => {
-      const frames = previews.get(previewId);
+      const frames = previews.get(previewId)?.frames;
       if (!frames || frames.length === 0) throw new SpineError("PREVIEW_NOT_FOUND", "The preview does not exist in this server session.");
       const count = Math.min(samples ?? 6, frames.length);
       const indices = Array.from({ length: count }, (_unused, index) =>
@@ -1590,7 +1662,7 @@ export function createServer(): McpServer {
     new ResourceTemplate("spine-preview://{previewId}/{index}", { list: undefined }),
     { title: "Rendered Spine preview frame", mimeType: "image/png" },
     async (uri, { previewId, index }) => {
-      const path = previews.get(String(previewId))?.[Number(index)];
+      const path = previews.get(String(previewId))?.frames[Number(index)];
       if (!path) throw new SpineError("PREVIEW_NOT_FOUND", "The preview frame does not exist in this server session.");
       return { contents: [{ uri: uri.href, mimeType: "image/png", blob: (await readFile(path)).toString("base64") }] };
     },

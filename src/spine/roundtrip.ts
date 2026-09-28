@@ -140,6 +140,7 @@ export async function roundTripEdit(input: RoundTripInput, edits: EditStore) {
     const importedProjectPath = join(dirname(source.path), "edited.spine");
     const imported = await importData(stagedJsonPath, importedProjectPath,
       basename(source.path, ".json"), input.editorVersion, input.timeoutMs);
+    const importedProjectHash = await hashFile(importedProjectPath);
 
     step = "reexport-edited";
     const reexported = await exportData(importedProjectPath, dataSettingsPath, runDir, input.editorVersion, input.timeoutMs);
@@ -207,6 +208,11 @@ export async function roundTripEdit(input: RoundTripInput, edits: EditStore) {
     const previewReview = await analyzePreview(after.frames.map((frame) => frame.path));
     const contacts = input.contactRegions?.length
       ? await analyzeFootContacts(after.frames.map((frame) => frame.path), input.contactRegions) : undefined;
+    if (await hashFile(source.path) !== stage.sourceHash
+      || await hashFile(reexportedDocument.path) !== reexportedDocument.hash
+      || await hashFile(importedProjectPath) !== importedProjectHash) {
+      throw new SpineError("SOURCE_CHANGED", "Round-trip JSON or the imported project changed during export and rendering.");
+    }
     if (await hashFile(projectPath) !== sourceProjectHash) {
       throw new SpineError("SOURCE_CHANGED", "The source .spine project changed during the round trip.");
     }
@@ -221,7 +227,7 @@ export async function roundTripEdit(input: RoundTripInput, edits: EditStore) {
       edit: { editId: stage.editId, operations: input.operations, sourceJsonPath: source.path,
         sourceHash: stage.sourceHash, stagedJsonPath, stagedHash: stage.afterHash,
         changeCount: stage.changeCount, diagnostics: stage.diagnostics },
-      importedProject: { path: importedProjectPath, sha256: await hashFile(importedProjectPath) },
+      importedProject: { path: importedProjectPath, sha256: importedProjectHash },
       reexported: { path: reexportedDocument.path, sha256: reexportedDocument.hash,
         diagnostics: reexportedDiagnostics, imagesDir: reexportAssets.imagesDir,
         missingImages: reexportAssetCheck.missingCount },
