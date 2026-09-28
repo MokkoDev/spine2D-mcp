@@ -116,3 +116,19 @@ test("semantic fidelity checks other animations and unfamiliar setup properties"
     "/animations/idle/bones/arm/rotate/0/value", "/bones/1/customEditorFlag",
   ]);
 });
+
+test("semantic fidelity accepts equivalent constant curves and an omitted clear-attachment name", () => {
+  const original = structuredClone(base);
+  original.animations.wave.bones.arm.rotate = [
+    { time: 0, value: 10 }, { time: 0.5, value: 10, curve: [0.6, 10, 0.8, 10] },
+    { time: 1, value: 10 },
+  ];
+  original.animations.wave.slots = { hand: { attachment: [{ time: 0.5, name: null }] } };
+  const exported = structuredClone(original);
+  exported.animations.wave.bones.arm.rotate[0].curve = "stepped";
+  exported.animations.wave.bones.arm.rotate[1].curve = "stepped";
+  delete exported.animations.wave.slots.hand.attachment[0].name;
+  assert.equal(compare(exported, original).differenceCount, 0);
+  exported.animations.wave.bones.arm.rotate[1].value = 11;
+  assert.ok(compare(exported, original).differenceCount > 0);
+});

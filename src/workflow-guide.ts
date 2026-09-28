@@ -12,6 +12,7 @@ export const SERVER_INSTRUCTIONS = [
   RIG_ASSEMBLY_RULE,
   RIG_READY_NEXT_ACTION,
   "For related JSON changes, spine_preview_edit stages a validated edit. Revise with baseEditId, review diagnostics and the net diff, then commit the chosen editId.",
+  "For final delivery of reviewed JSON as a native project with HTML and contact sheet, call spine_finalize_animation.",
 ].join(" ");
 
 const WORKFLOWS = {
@@ -51,6 +52,15 @@ const WORKFLOWS = {
       "saved PNG export settings", "animation name", "edit operations", "licensed Spine CLI and display/OpenGL"],
     steps: ["spine_round_trip_edit exports, stages, imports a new project, re-exports, validates, and renders both versions.",
       "Read contactSheetUri and pairs, then inspect importedProject.path and the run manifest."],
+  },
+  final_delivery: {
+    useWhen: "Deliver a reviewed skeleton JSON as a native .spine project with both visual previews.",
+    primaryTools: ["spine_finalize_animation"],
+    needs: ["reviewed Spine JSON", "saved JSON and PNG export settings", "animation name",
+      "images or an atlas", "licensed Spine CLI and display/OpenGL"],
+    steps: ["After reviewing and committing the JSON, call spine_finalize_animation once with its path and export settings.",
+      "The tool imports a new .spine project, verifies its JSON re-export, renders frames, and creates a contact sheet and HTML player.",
+      "Deliver projectPath, htmlPath, and contactSheetPath together; inspect the returned previewReview."],
   },
   new_motion: {
     useWhen: "Generate a new idle, blink, breathing, walk, run, recoil, or follow-through clip from a rig.",

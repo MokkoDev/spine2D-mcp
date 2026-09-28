@@ -107,6 +107,8 @@ test("stdio MCP handshake exposes and calls only implemented tools", { timeout: 
     assert.equal(guide.goal, "round_trip");
     assert.deepEqual(guide.primaryTools, ["spine_round_trip_edit"]);
     assert.ok(guide.steps.some((step) => step.includes("spine_round_trip_edit")));
+    const deliveryGuide = parseTextResult(await client.callTool({ name: "spine_workflow_guide", arguments: { goal: "final_delivery" } }));
+    assert.deepEqual(deliveryGuide.primaryTools, ["spine_finalize_animation"]);
     for (const goal of ["edit_json", "new_motion"]) {
       const revisionGuide = parseTextResult(await client.callTool({ name: "spine_workflow_guide", arguments: { goal } }));
       assert.ok(revisionGuide.steps.some((step) => step.includes("baseEditId")));

@@ -20,6 +20,7 @@ import { analyzeContacts, analyzeFootContacts } from "./spine/contact.js";
 import { cleanupAnimations, exportData, exportMedia, findSpineCli, importData, packAtlas, projectInfo, renderPreview, unpackAtlas } from "./spine/cli.js";
 import { EditStore } from "./spine/edit.js";
 import { SpineError } from "./spine/errors.js";
+import { finalizeAnimation } from "./spine/finalize.js";
 import { applyPoseOperations, capturePose, type SavedPose } from "./spine/full-pose.js";
 import { applyMeshPoseOperations, captureMeshPose, type SavedMeshPose } from "./spine/mesh-pose.js";
 import { buildMotionOperations } from "./spine/motion.js";
@@ -189,7 +190,7 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.workflowGuide,
     { description: "Start here when a Spine task could use several tools. Choose by source and outcome; get the recommended entry tools and steps.",
-      inputSchema: z.object({ goal: z.enum(["choose", "inspect", "create_project", "rig_review", "round_trip", "new_motion", "edit_json", "reuse_pose", "review_motion", "batch_export"]).optional() }) },
+      inputSchema: z.object({ goal: z.enum(["choose", "inspect", "create_project", "rig_review", "round_trip", "final_delivery", "new_motion", "edit_json", "reuse_pose", "review_motion", "batch_export"]).optional() }) },
     async ({ goal }) => runTool(async () => workflowGuide(goal)),
   );
 
@@ -1030,6 +1031,41 @@ export function createServer(): McpServer {
           meanAbsoluteDifference: result.comparison.frames[index].meanAbsoluteDifference,
           changedPixelPercent: result.comparison.frames[index].changedPixelPercent,
         })) };
+    }),
+  );
+
+  server.registerTool(
+    TOOL_NAMES.finalizeAnimation,
+    {
+      description: "Deliver a reviewed Spine JSON animation in one call: import a new .spine project, verify its re-export, render frames, and return both an HTML player and contact sheet. No existing project is overwritten.",
+      inputSchema: z.object({ dataPath: z.string().min(1), dataSettingsPath: z.string().min(1),
+        previewSettingsPath: z.string().min(1), outputDir: z.string().min(1),
+        editorVersion: z.enum(["4.2", "4.3"]), animation: z.string().min(1),
+        atlasPath: z.string().min(1).optional(), imagesDir: z.string().min(1).optional(),
+        skin: z.string().min(1).optional(), fps: z.number().int().min(1).max(120).optional(),
+        display: z.string().min(1).max(255).optional(), samples: z.number().int().min(1).max(12).optional(),
+        runtimeJsPath: z.string().min(1).optional(), runtimeCssPath: z.string().min(1).optional(),
+        timeoutMs: z.number().int().min(1_000).max(600_000).optional() }),
+    },
+    async (input) => runTool(async () => {
+      const result = await finalizeAnimation(input);
+      const framePreview = publishPreview(result.rendered, { kind: "derived",
+        sourcePath: result.manifest.reexported.path, sourceHash: result.manifest.reexported.sha256,
+        renderPath: result.manifest.project.path, renderHash: result.manifest.project.sha256 });
+      const sheetId = publishFrames([result.sheet.path]);
+      const playerId = randomUUID();
+      players.set(playerId, result.player.htmlPath);
+      if (players.size > 20) players.delete(players.keys().next().value!);
+      return { runDir: result.runDir, manifestPath: result.manifestPath,
+        projectPath: result.manifest.project.path, reexportedJsonPath: result.manifest.reexported.path,
+        verified: true, fidelity: result.manifest.reexported.fidelity,
+        animation: result.manifest.animation, frameCount: result.rendered.frames.length,
+        previewId: framePreview.previewId, frames: framePreview.frames,
+        framesTruncated: framePreview.framesTruncated,
+        sampledIndices: result.manifest.rendered.sampledIndices,
+        contactSheetPath: result.sheet.path, contactSheetUri: `spine-preview://${sheetId}/0`,
+        htmlPath: result.player.htmlPath, playerUri: `spine-player://${playerId}/html`,
+        runtimeSource: result.player.runtimeSource, previewReview: result.manifest.rendered.review };
     }),
   );
 

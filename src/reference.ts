@@ -5,7 +5,7 @@ export const REFERENCE_PAGES = [
   { slug: "inspect", title: "Inspect and validate a skeleton", description: "Find animations, keys, assets, and references before editing.", keywords: "inspect search validate animation bones slots assets references" },
   { slug: "edit-json", title: "Stage JSON edits", description: "Retime, author keys, and combine validated operations.", keywords: "edit stage preview_edit retime keyframe curve animation" },
   { slug: "preview-commit", title: "Preview and commit an edit", description: "Read diffs, render staged frames, compare, and save with history.", keywords: "diff diagnostics render compare preview commit history" },
-  { slug: "round-trip", title: "Edit an existing Spine project", description: "Export, import, and visually verify a new .spine project.", keywords: "spine project cli export import nonessential round trip" },
+  { slug: "round-trip", title: "Edit and deliver a Spine project", description: "Export, import, verify, and deliver a new .spine project with previews.", keywords: "spine project cli export import nonessential round trip final delivery html contact sheet" },
   { slug: "create-rig", title: "Create a skeleton and rig", description: "Create JSON, add bones and attachments, or assemble PNG parts.", keywords: "create skeleton rig bones slots attachments landmarks png" },
   { slug: "reuse-motion", title: "Reuse and review motion", description: "Clone or retarget animation, transfer poses, and check loops.", keywords: "motion pose retarget clone loop quality review" },
   { slug: "production", title: "Batch and export workflows", description: "Save export profiles and run batch edits.", keywords: "batch export profile atlas production" },

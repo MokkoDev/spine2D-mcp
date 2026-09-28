@@ -47,6 +47,7 @@ function defaultFor(parent: Path, field: string, source: JsonRecord, root: JsonR
   }
   if (parent.length === 1 && parent[0] === "skeleton") {
     if (field === "fps") return 30;
+    if (field === "audio") return "./audio";
   }
   if (parent.length === 2 && parent[0] === "bones" && typeof parent[1] === "number") {
     return pick({ length: 0, x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1,
@@ -76,6 +77,7 @@ function defaultFor(parent: Path, field: string, source: JsonRecord, root: JsonR
       return record(definition) && Object.hasOwn(definition, field) ? definition[field] : fallback;
     }
     if ((section === "drawOrder" || section === "draworder") && field === "offsets") return [];
+    if (section === "slots" && parent[4] === "attachment" && field === "name") return null;
     if (section === "bones") {
       const type = String(parent[4] ?? "").toLowerCase();
       if (type === "rotate" && (field === "angle" || field === "value")) return 0;
@@ -95,9 +97,39 @@ function ignored(path: Path): boolean {
     && ["hash", "x", "y", "width", "height"].includes(String(path[1]));
 }
 
+function sameKeyValue(left: JsonRecord, right: JsonRecord): boolean {
+  const fields = new Set([...Object.keys(left), ...Object.keys(right)]);
+  fields.delete("time");
+  fields.delete("curve");
+  return [...fields].every((field) => typeof left[field] === "number" && typeof right[field] === "number"
+    ? equalNumber(left[field], right[field] as number) : Object.is(left[field], right[field]));
+}
+
+function flatCurve(curve: unknown, key: JsonRecord): boolean {
+  if (curve === undefined || curve === "stepped") return true;
+  if (!Array.isArray(curve)) return false;
+  if (curve.length === 4 && typeof key.value === "number") {
+    return equalNumber(curve[1], key.value) && equalNumber(curve[3], key.value);
+  }
+  if (curve.length === 8 && typeof key.x === "number" && typeof key.y === "number") {
+    return equalNumber(curve[1], key.x) && equalNumber(curve[3], key.x)
+      && equalNumber(curve[5], key.y) && equalNumber(curve[7], key.y);
+  }
+  return false;
+}
+
 function normalize(value: unknown, path: Path, root: JsonRecord): unknown {
   if (Array.isArray(value)) {
     const items = value.map((item, index) => normalize(item, [...path, index], root));
+    if (path[0] === "animations" && path[2] === "bones" && path.length === 5) {
+      for (let index = 0; index + 1 < items.length; index++) {
+        const current = items[index];
+        const next = items[index + 1];
+        if (record(current) && record(next) && sameKeyValue(current, next) && flatCurve(current.curve, current)) {
+          delete current.curve;
+        }
+      }
+    }
     // A skin with no attachments, bones, or constraints is the implicit default skin.
     if (path.length === 1 && path[0] === "skins" && items.length === 1
       && record(items[0]) && Object.keys(items[0]).length === 1 && items[0].name === "default") return [];
@@ -167,6 +199,7 @@ export function compareSemanticFidelity(staged: SpineDocument, reexported: Spine
   return { differenceCount, differences, differencesTruncated: differenceCount > differences.length,
     numericTolerance: NUMERIC_TOLERANCE,
     allowances: ["JSON object member order and whitespace", "Spine patch version and generated skeleton hash/bounds",
-      "documented omitted default values and empty sections", "hex color letter case",
+      "documented omitted default values and empty sections", "equivalent constant-segment curves",
+      "hex color letter case",
       "absolute numeric difference below 0.0001"] };
 }
