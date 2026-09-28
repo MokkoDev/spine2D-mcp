@@ -34,7 +34,7 @@ import { deleteExportProfile, getExportProfile, listExportProfiles, runExportPro
 import { analyzePreview, checkAnimation } from "./spine/quality.js";
 import { validateDocument } from "./spine/validate.js";
 import { createFrameContactSheet, createVisualComparison } from "./spine/visual.js";
-import { SERVER_INSTRUCTIONS, workflowGuide } from "./workflow-guide.js";
+import { RIG_ASSEMBLY_RULE, RIG_CONFIRMATION_RULE, SERVER_INSTRUCTIONS, workflowGuide } from "./workflow-guide.js";
 import { REFERENCE_PAGES, readReferencePage, referenceUri, searchReference } from "./reference.js";
 
 function jsonResult(value: Record<string, unknown>) {
@@ -380,7 +380,7 @@ export function createServer(): McpServer {
 
   server.registerTool(
     TOOL_NAMES.startRigReview,
-    { description: "Inventory PNG parts, return a starter manifest and sourceHash, and open a local two-view rig editor. Connect and place every part with spine_save_rig_draft, validate, and inspect an assembled preview before asking for user confirmation. Build only after that confirmation.",
+    { description: `Inventory PNG parts, return a starter manifest and sourceHash, and open a local two-view rig editor. ${RIG_ASSEMBLY_RULE}`,
       inputSchema: z.object({ imagesDir: z.string().min(1), manifestPath: z.string().min(1).optional(), outputDir: z.string().min(1), editorVersion: z.enum(["4.2", "4.3"]) }) },
     async (input) => runTool(async () => startRigReview(input)),
   );
@@ -388,7 +388,7 @@ export function createServer(): McpServer {
   const rigPoint = z.tuple([z.number().finite(), z.number().finite()]);
   server.registerTool(
     TOOL_NAMES.saveRigDraft,
-    { description: "Save the entire connected PNG assembly draft before asking the user to confirm it. Provide the manifest and sourceHash returned by spine_start_rig_review, with all parent landmarks, joint positions, and draw order set. Invalid or stale drafts are rejected.",
+    { description: "Save a connected PNG assembly draft using the manifest and sourceHash returned by spine_start_rig_review. Invalid or stale drafts are rejected.",
       inputSchema: z.object({ manifestPath: z.string().min(1), sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
         draft: z.object({ schemaVersion: z.literal(1), spineVersion: z.enum(["4.2", "4.3"]), imagesDir: z.string(),
           root: z.object({ part: z.string(), landmark: z.string(), world: rigPoint }),
@@ -412,7 +412,7 @@ export function createServer(): McpServer {
 
   server.registerTool(
     TOOL_NAMES.buildRigFromLandmarks,
-    { description: "Compile a reviewed PNG landmark rig into new Spine JSON and optionally import a native .spine project without overwriting outputs. Call only after the user explicitly confirms the rig in a new message.",
+    { description: `Compile a reviewed PNG landmark rig into new Spine JSON and optionally import a native .spine project without overwriting outputs. ${RIG_CONFIRMATION_RULE}`,
       inputSchema: z.object({ manifestPath: z.string().min(1), outputDataPath: z.string().min(1),
         outputProjectPath: z.string().min(1).optional(), editorVersion: z.enum(["4.2", "4.3"]) }) },
     async (input) => runTool(async () => buildRigFromLandmarks(input)),
@@ -1544,11 +1544,11 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_render_staged_edit",
     {
-      description: "Render one uncommitted editId to PNG frames. Use spine_compare_previews for before/after pairs; requires Spine CLI and OpenGL display.",
+      description: "Render one uncommitted editId to PNG frames. Defaults to display :0; pass display to override it. Use spine_compare_previews for before/after pairs; requires Spine CLI and OpenGL display.",
       inputSchema: z.object(stagedRenderOptions),
     },
     async ({ editId, ...options }) => runTool(async () => withStageFiles(editId, async (_beforePath, afterPath, snapshot) => {
-      const result = await renderPreview({ ...options, inputPath: afterPath });
+      const result = await renderPreview({ ...options, inputPath: afterPath, display: options.display ?? ":0" });
       await verifyRenderedInput(result, afterPath, snapshot.afterHash);
       return { editId, afterHash: snapshot.afterHash,
         ...publishPreview(result, { kind: "stage", editId, sourcePath: snapshot.sourcePath,

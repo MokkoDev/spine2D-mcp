@@ -43,16 +43,7 @@ The server waits for an MCP client on standard input. To run the built version, 
 
 ## Start here
 
-For a Spine 4.2 or 4.3 JSON export:
-
-1. Call `spine_inspect_project` and, for a clip, `spine_inspect_animation`.
-2. Stage a change with a named edit tool or `spine_preview_edit`. Keep the returned `editId`.
-3. Read `diagnostics` and `diffResourceUri`. If rendering is available, call `spine_compare_previews` and inspect the contact sheet and PNG pairs.
-4. Call `spine_commit_edit` with the chosen `editId` to save the JSON with history.
-
-Read the short [start-here guide](docs/reference/start-here.md) or its MCP resource `spine-docs://reference/start-here`. Call `spine_search_reference` with a task or tool name, then fetch the returned slug with `spine_get_reference` or read its resource URI for focused examples. `spine_workflow_guide` with `goal: "choose"` gives task-based entry points; `spine_capabilities` finds specialized typed tools. [FUNCTIONS.md](FUNCTIONS.md) is the full schema and limits catalog.
-
-For existing `.spine` projects needing editor import and visual verification, use `spine_round_trip_edit` with Nonessential data enabled in saved JSON export settings.
+Follow the [start-here guide](docs/reference/start-here.md) or read its MCP resource `spine-docs://reference/start-here` for the inspect, edit, preview, and commit sequence. Call `spine_search_reference` with a task or tool name, then fetch the returned slug with `spine_get_reference` or read its resource URI for focused examples. `spine_workflow_guide` with `goal: "choose"` gives task-based entry points; `spine_capabilities` finds specialized typed tools. [FUNCTIONS.md](FUNCTIONS.md) is the full schema and limits catalog.
 
 ### Deferred tool search in supporting clients
 

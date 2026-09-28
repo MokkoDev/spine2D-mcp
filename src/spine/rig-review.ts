@@ -4,11 +4,40 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { SpineError } from "./errors.js";
-import { buildRigFromLandmarks, imageDirectory, inventoryImages, readImageInfo, readRigManifest, suggestRigManifest, validateRigManifest, type RigManifest } from "./landmark-rig.js";
+import { buildRigFromLandmarks, calculateRigPlacements, imageDirectory, inventoryImages, readImageInfo, readRigManifest, suggestRigManifest, validateRigManifest, type RigManifest } from "./landmark-rig.js";
+import { RIG_INCOMPLETE_NEXT_ACTION, RIG_READY_NEXT_ACTION } from "../workflow-guide.js";
 
 function scriptJson(value: unknown) { return JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll("\u2028", "\\u2028").replaceAll("\u2029", "\\u2029"); }
 function sha(text: string) { return createHash("sha256").update(text).digest("hex"); }
 const sessions = new Map<string, Server>();
+
+async function checkRigDraftSources(current: RigManifest, draft: RigManifest, manifestPath: string, allowReviewedImages: boolean) {
+  const oldById = new Map(current.parts.map((part) => [part.id, part]));
+  if (!Array.isArray(draft.parts) || draft.schemaVersion !== current.schemaVersion || draft.spineVersion !== current.spineVersion
+    || draft.imagesDir !== current.imagesDir || draft.parts.length !== current.parts.length
+    || draft.parts.some((part) => !part || !oldById.has(part.id) || part.image !== oldById.get(part.id)!.image)
+    || new Set(draft.parts.map((part) => part.id)).size !== draft.parts.length)
+    throw new SpineError("IMMUTABLE_IMAGE_METADATA", "Assembly edits cannot change source images or part identities.");
+  for (const part of draft.parts) {
+    const old = oldById.get(part.id)!;
+    if (part.width === old.width && part.height === old.height && part.sha256 === old.sha256) continue;
+    if (!allowReviewedImages) throw new SpineError("IMMUTABLE_IMAGE_METADATA", "Assembly edits cannot change source image metadata.");
+    const actual = await readImageInfo(imageDirectory(current, manifestPath), part.image);
+    if (part.width !== actual.width || part.height !== actual.height || part.sha256 !== actual.sha256)
+      throw new SpineError("IMAGE_REVIEW_REQUIRED", `Changed image ${part.image} needs current dimensions and hash; review its landmarks.`);
+  }
+}
+
+async function writeRigDraft(manifestPath: string, draft: RigManifest, sourceHash: string) {
+  const temp = join(dirname(manifestPath), `.rig-manifest-${randomUUID()}.json`);
+  try {
+    await writeFile(temp, `${JSON.stringify(draft, null, 2)}\n`, { flag: "wx" });
+    if (sha(JSON.stringify(await readRigManifest(manifestPath))) !== sourceHash)
+      throw new SpineError("RIG_DRAFT_CHANGED", "The rig draft changed while it was being saved. Reload it before retrying.");
+    await rename(temp, manifestPath);
+  } finally { await rm(temp, { force: true }); }
+  return sha(JSON.stringify(draft));
+}
 
 export async function saveRigDraft(input: { manifestPath: string; sourceHash: string; draft: RigManifest }) {
   const manifestPath = resolve(input.manifestPath);
@@ -16,23 +45,13 @@ export async function saveRigDraft(input: { manifestPath: string; sourceHash: st
   if (sha(JSON.stringify(current)) !== input.sourceHash)
     throw new SpineError("RIG_DRAFT_CHANGED", "The rig draft changed since it was opened. Reload it before saving an assembled draft.");
   const draft = input.draft;
-  if (draft.schemaVersion !== current.schemaVersion || draft.spineVersion !== current.spineVersion || draft.imagesDir !== current.imagesDir
-    || draft.parts.length !== current.parts.length || draft.parts.some((part, index) => {
-      const old = current.parts[index];
-      return !old || part.id !== old.id || part.image !== old.image || part.width !== old.width || part.height !== old.height || part.sha256 !== old.sha256;
-    })) throw new SpineError("IMMUTABLE_IMAGE_METADATA", "Assembly edits cannot change source images or part identities.");
+  await checkRigDraftSources(current, draft, manifestPath, false);
   const checked = await validateRigManifest(draft, manifestPath);
   if (!checked.valid) throw new SpineError("INVALID_RIG_MANIFEST", "Connect and place every part before saving the assembled draft.", { diagnostics: checked.diagnostics });
-  const temp = join(dirname(manifestPath), `.rig-manifest-${randomUUID()}.json`);
-  try {
-    await writeFile(temp, `${JSON.stringify(draft, null, 2)}\n`, { flag: "wx" });
-    if (sha(JSON.stringify(await readRigManifest(manifestPath))) !== input.sourceHash)
-      throw new SpineError("RIG_DRAFT_CHANGED", "The rig draft changed while it was being saved. Reload it before retrying.");
-    await rename(temp, manifestPath);
-  } finally { await rm(temp, { force: true }); }
-  return { manifestPath, sourceHash: sha(JSON.stringify(draft)), reviewStatus: "ready_for_visual_preview",
+  const sourceHash = await writeRigDraft(manifestPath, draft, input.sourceHash);
+  return { manifestPath, sourceHash, reviewStatus: "ready_for_visual_preview",
     diagnostics: checked.diagnostics,
-    nextAction: "Call spine_preview_rig and inspect the connected setup and bend snapshots. Present the assembled visual preview and refreshed editor to the user, then stop until they explicitly confirm the rig." };
+    nextAction: RIG_READY_NEXT_ACTION };
 }
 
 export async function reviewHtml(manifest: RigManifest, manifestPath: string, token: string) {
@@ -62,7 +81,7 @@ export async function reviewHtml(manifest: RigManifest, manifestPath: string, to
 <script id="rig-data" type="application/json">${initial}</script><script>
 (function(){'use strict';
 const boot=JSON.parse(document.getElementById('rig-data').textContent);let m=boot.manifest;let saved=JSON.stringify(m);for(const p of m.parts)delete p.confirmed;delete m.drawOrderConfirmed;let savedHash=boot.hash;let selected=m.root.part;let zoom=2;let drag=null;let pose={};let testing=false;let showBones=true;let showPoints=true;let trayHits=[];let saveTimer=null;let savePromise=null;let history=[JSON.stringify(m)];let historyIndex=0;let status=document.getElementById('status');const $=id=>document.getElementById(id);const pc=$('part-canvas'),ac=$('assembly-canvas'),pctx=pc.getContext('2d'),actx=ac.getContext('2d');const imgs={};for(const [id,src] of Object.entries(boot.images)){const im=new Image();im.onload=draw;im.src=src;imgs[id]=im}
-$('file').textContent=boot.manifestPath;const part=()=>m.parts.find(p=>p.id===selected);const byId=id=>m.parts.find(p=>p.id===id);const point=(a,b)=>[a[0]+b[0],a[1]+b[1]];const diff=(a,b)=>[a[0]-b[0],a[1]-b[1]];const rotate=(p,a)=>[p[0]*Math.cos(a)-p[1]*Math.sin(a),p[0]*Math.sin(a)+p[1]*Math.cos(a)];const rad=d=>d*Math.PI/180;const deg=r=>r*180/Math.PI;
+$('file').textContent=boot.manifestPath;const part=()=>m.parts.find(p=>p.id===selected);const byId=id=>m.parts.find(p=>p.id===id);const rad=d=>d*Math.PI/180;const deg=r=>r*180/Math.PI;
 function fillSelect(el,items,value){el.innerHTML='';for(const [v,label] of items){const o=document.createElement('option');o.value=v;o.textContent=label;el.append(o)}el.value=value}
 function orderedParts(){const ids=new Set(m.parts.map(p=>p.id));return [...new Set([...(Array.isArray(m.drawOrder)?m.drawOrder:[]),...m.parts.map(p=>p.id)])].filter(id=>ids.has(id))}
 function syncPartSelect(){fillSelect($('part'),orderedParts().map(id=>[id,id]),selected)}
@@ -78,8 +97,8 @@ function dot(ctx,x,y,name){ctx.fillStyle='#ffce68';ctx.strokeStyle='#10202a';ctx
 function partTransform(){const p=part(),s=zoom,x=(pc.width-p.width*s)/2,y=(pc.height-p.height*s)/2;return{x,y,s}}
 function drawPart(){const p=part(),t=partTransform();pctx.fillStyle='#242a33';pctx.fillRect(0,0,pc.width,pc.height);checker(pctx,t.x,t.y,p.width*t.s,p.height*t.s,Math.max(8,Math.round(12*t.s)));const im=imgs[p.id];if(im?.complete)pctx.drawImage(im,t.x,t.y,p.width*t.s,p.height*t.s);pctx.strokeStyle='#fff';pctx.lineWidth=1.5;pctx.strokeRect(t.x,t.y,p.width*t.s,p.height*t.s);pctx.strokeStyle='#00c9ea';pctx.setLineDash([5,3]);const b=imageBounds(im);if(b)pctx.strokeRect(t.x+b[0]*t.s,t.y+b[1]*t.s,(b[2]-b[0])*t.s,(b[3]-b[1])*t.s);pctx.setLineDash([]);for(const [n,v] of Object.entries(p.landmarks))dot(pctx,t.x+v[0]*t.s,t.y+v[1]*t.s,n);const pivot=p.landmarks[p.pivot];if(pivot){const x=t.x+pivot[0]*t.s,y=t.y+pivot[1]*t.s,a=-rad(p.setupRotationDeg);pctx.strokeStyle='#ffdc70';pctx.lineWidth=2;pctx.beginPath();pctx.moveTo(x,y);pctx.lineTo(x+26*Math.cos(a),y+26*Math.sin(a));pctx.stroke()}pctx.fillStyle='#fff';pctx.fillText('White: PNG canvas   Cyan: opaque pixels   Rotation: '+p.setupRotationDeg.toFixed(1)+'°',12,22)}
 const boundsCache={};function imageBounds(im){if(!im?.complete||!im.naturalWidth)return null;if(boundsCache[im.src])return boundsCache[im.src];const c=document.createElement('canvas');c.width=im.naturalWidth;c.height=im.naturalHeight;const x=c.getContext('2d');x.drawImage(im,0,0);const d=x.getImageData(0,0,c.width,c.height).data;let x0=c.width,y0=c.height,x1=-1,y1=-1;for(let y=0;y<c.height;y++)for(let xx=0;xx<c.width;xx++)if(d[(y*c.width+xx)*4+3]>16){x0=Math.min(x0,xx);y0=Math.min(y0,y);x1=Math.max(x1,xx);y1=Math.max(y1,y)}return boundsCache[im.src]=x1<0?null:[x0,y0,x1+1,y1+1]}
-function placements(){const cache={};function one(id,seen=new Set()){if(cache[id])return cache[id];if(seen.has(id))return null;seen.add(id);const p=byId(id);if(!p||(!p.parent&&id!==m.root.part))return null;const parent=p.parent?one(p.parent.part,new Set(seen)):null;if(p.parent&&!parent)return null;const B=parent?parent.landmarks[p.parent.landmark]:m.root.world;if(!B)return null;const parentPart=parent?byId(parent.id):null;const phi=rad(p.setupRotationDeg+(pose[id]||0)+(parent?parent.imageAngleDeg-parentPart.setupRotationDeg:0));const d=v=>[v[0]-p.width/2,p.height/2-v[1]];const C=diff(B,rotate(d(p.landmarks[p.pivot]),phi));const landmarks={};for(const [n,v] of Object.entries(p.landmarks))landmarks[n]=point(C,rotate(d(v),phi));const T=landmarks[p.tip];return cache[id]={id,pivot:B,tip:T,center:C,imageAngleDeg:deg(phi),boneAngleDeg:deg(Math.atan2(T[1]-B[1],T[0]-B[0])),landmarks}}
-for(const p of m.parts)one(p.id);return cache}
+const rigPlacements = ${calculateRigPlacements.toString()};
+function placements(){return rigPlacements(m,pose)}
 function worldScreen(p){return[ac.width/2+p[0]*zoom,ac.height-90-p[1]*zoom]}function screenWorld(p){return[(p[0]-ac.width/2)/zoom,(ac.height-90-p[1])/zoom]}
 function drawAssembly(){actx.fillStyle='#252b34';actx.fillRect(0,0,ac.width,ac.height);const all=placements();actx.strokeStyle='#f5f5f5';actx.lineWidth=2;actx.beginPath();actx.moveTo(0,ac.height-90);actx.lineTo(ac.width,ac.height-90);actx.stroke();for(const id of m.drawOrder){const p=byId(id),a=all[id],im=imgs[id];if(!p||!a||!im?.complete)continue;const c=worldScreen(a.center);actx.save();actx.translate(c[0],c[1]);actx.rotate(-rad(a.imageAngleDeg));actx.drawImage(im,-p.width*zoom/2,-p.height*zoom/2,p.width*zoom,p.height*zoom);actx.restore()}
 for(const p of m.parts){const a=all[p.id];if(!a)continue;const b=worldScreen(a.pivot),t=worldScreen(a.tip);if(showBones){actx.strokeStyle=p.id===selected?'#ffdc70':'#80bbff';actx.lineWidth=p.id===selected?3:2;actx.beginPath();actx.moveTo(b[0],b[1]);actx.lineTo(t[0],t[1]);actx.stroke()}if(showPoints){dot(actx,b[0],b[1],p.id+(p.id===selected?' pivot':''));if(p.id===selected){dot(actx,t[0],t[1],'rotate');for(const [name,w] of Object.entries(a.landmarks))if(name!==p.pivot&&name!==p.tip){const v=worldScreen(w);dot(actx,v[0],v[1],name)}}}}
@@ -124,7 +143,6 @@ export async function startRigReview(input: { imagesDir: string; manifestPath?: 
   await mkdir(outputDir, { recursive: true });
   const htmlPath = join(outputDir, `rig-review-${randomUUID()}.html`);
   await writeFile(htmlPath, html, { flag: "wx" });
-  const workspace = dirname(manifestPath);
   const server = createHttpServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     const json = (status: number, value: unknown) => { response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }); response.end(JSON.stringify(value)); };
@@ -145,23 +163,9 @@ export async function startRigReview(input: { imagesDir: string; manifestPath?: 
         let raw = "";
         for await (const chunk of request) { raw += chunk.toString(); if (raw.length > 4_000_000) throw new SpineError("MANIFEST_TOO_LARGE", "Manifest exceeds 4 MB."); }
         const next = JSON.parse(raw) as RigManifest;
-        const oldById = new Map(current.parts.map((p) => [p.id, p]));
-        if (!Array.isArray(next.parts) || next.parts.length !== current.parts.length || next.schemaVersion !== 1 || next.spineVersion !== current.spineVersion || next.imagesDir !== current.imagesDir
-          || next.parts.some((p) => { const old = oldById.get(p.id); return !old || p.image !== old.image; })) {
-          throw new SpineError("IMMUTABLE_IMAGE_METADATA", "The editor cannot change part identities or source image paths.");
-        }
-        for (const part of next.parts) {
-          const old = oldById.get(part.id)!;
-          if (part.width === old.width && part.height === old.height && part.sha256 === old.sha256) continue;
-          const actual = await readImageInfo(imageDirectory(current, manifestPath), part.image);
-          if (part.width !== actual.width || part.height !== actual.height || part.sha256 !== actual.sha256) {
-            throw new SpineError("IMAGE_REVIEW_REQUIRED", `Changed image ${part.image} needs current dimensions and hash; review its landmarks.`);
-          }
-        }
+        await checkRigDraftSources(current, next, manifestPath, true);
         const check = await validateRigManifest(next, manifestPath);
-        const temp = join(workspace, `.rig-manifest-${randomUUID()}.json`);
-        try { await writeFile(temp, `${JSON.stringify(next, null, 2)}\n`, { flag: "wx" }); await rename(temp, manifestPath); }
-        finally { await rm(temp, { force: true }); }
+        const nextHash = await writeRigDraft(manifestPath, next, currentHash);
         let htmlUpdateWarning: string | undefined;
         try {
           const nextHtml = await reviewHtml(next, manifestPath, token);
@@ -169,7 +173,7 @@ export async function startRigReview(input: { imagesDir: string; manifestPath?: 
           try { await writeFile(tempHtml, nextHtml, { flag: "wx" }); await rename(tempHtml, htmlPath); }
           finally { await rm(tempHtml, { force: true }); }
         } catch (error) { htmlUpdateWarning = error instanceof Error ? error.message : String(error); }
-        json(200, { manifestPath, hash: sha(JSON.stringify(next)), errors: check.errors, visualWarnings: check.visualWarnings,
+        json(200, { manifestPath, hash: nextHash, errors: check.errors, visualWarnings: check.visualWarnings,
           ...(htmlUpdateWarning ? { htmlUpdateWarning } : {}) });
       } catch (error) { json(400, { message: error instanceof Error ? error.message : String(error) }); }
       return;
@@ -196,7 +200,5 @@ export async function startRigReview(input: { imagesDir: string; manifestPath?: 
     manifest, sourceHash: sha(JSON.stringify(manifest)),
     diagnostics: validation.diagnostics,
     reviewStatus: validation.valid ? "ready_for_visual_preview" : "needs_assembly",
-    nextAction: validation.valid
-      ? "Generate and inspect the assembled setup and bend previews. Present the connected rig and editor to the user, then end your turn and wait for a new message explicitly confirming it before building or committing."
-      : "Complete the draft before asking for confirmation: connect every part to a parent landmark, position all art and joints, set draw order, and call spine_save_rig_draft with the returned manifest and sourceHash. Resolve validation errors, then generate and inspect an assembled visual preview. Present the complete rig and wait for explicit user confirmation before building or committing." };
+    nextAction: validation.valid ? RIG_READY_NEXT_ACTION : RIG_INCOMPLETE_NEXT_ACTION };
 }

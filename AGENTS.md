@@ -14,14 +14,18 @@ The guides in `docs/reference/` cover inspection, JSON edits, preview and commit
 
 ## Editing rules
 
-JSON creation, inspection, and editing work without Spine. Editing is limited to tested Spine 4.2 and 4.3 JSON exports. All JSON edits stage first. Read `diagnostics` and `diffResourceUri`, then call `spine_commit_edit` with the chosen `editId`. Commit checks the source hash and stores exact before and after copies plus a manifest in `.spine2d-mcp/history/` beside the JSON. Stages persist for seven days in `~/.local/state/spine2d-mcp/stages/`, or under `SPINE_MCP_STATE_DIR`. Retry a `COMMIT_FINALIZATION_FAILED` edit with the same ID.
+JSON creation, inspection, and editing work without Spine. Editing is limited to tested Spine 4.2 and 4.3 JSON exports. Stage JSON edits, review diagnostics and diff, then commit the selected stage. [Preview and commit](docs/reference/preview-commit.md) describes persistence, history, and retry behavior.
 
-Creating or importing `.spine` projects and rendering PNGs require a licensed Spine CLI. Rendering also needs images and a display with OpenGL. For editor reimport, use saved JSON export settings with `class: "export-json"` and `nonessential: true`. The CLI cannot edit an open `.spine` project; export JSON and import the edited data into a **new** project. Use `spine_round_trip_edit` to check production editor fidelity and visual changes.
+Creating or importing `.spine` projects and rendering PNGs require a licensed Spine CLI. Rendering also needs images and a display with OpenGL. [Edit an existing Spine project](docs/reference/round-trip.md) documents reimport settings and the new-project workflow.
 
 Supporting clients can defer MCP tool schema loading; the stdio server keeps its typed tools. See the [client setup notes](README.md#deferred-tool-search-in-supporting-clients).
+
+## Keep guidance in one place
+
+Give each rule, procedure, and example one authoritative home for its audience. Runtime rig assembly and confirmation wording lives in `src/workflow-guide.ts`; the human-facing procedure lives in [Create a skeleton and rig](docs/reference/create-rig.md). Other entry points should give a short pointer or use the exported runtime wording instead of copying the full sequence. Keep browser and server placement calculations in `calculateRigPlacements` and common draft checks in `src/spine/rig-review.ts`. The capability catalog may keep short searchable purposes, while tool registrations describe their inputs and limits. Link to the detailed guide when a second audience needs context, and update all callers when a shared rule changes.
 
 ## Development and verification
 
 Run `npm ci` and `npm test` for ordinary development; `npm test` builds first. `npm run dev` starts the TypeScript server directly. `npm run test:examples` downloads pinned official Spine 4.2 and 4.3 JSON fixtures. With a licensed CLI and a display with OpenGL, run `SPINE_CLI_PATH=/absolute/path/to/Spine npm run test:cli`; it uses a temporary directory and pinned Spineboy data and images.
 
-`install.sh` runs `npm ci` and the offline tests, then registers this checkout's `startup.sh` with Codex and Claude Code. It prompts for a scope directory: an empty answer uses global client registration; a directory writes project MCP config there and in existing nested Git repositories. `uninstall.sh` uses the same prompt. Scoped install uses Bash and Git and marks the scope's Git repositories trusted in Codex. Claude Code may ask for project MCP approval on first use. It saves an optional CLI path in `.spine2d-mcp-cli-path`. Keep the checkout path stable while registered. The generated `.codex/` directory is Git ignored.
+For installation and registration details, follow the [README](README.md#install). Keep the checkout path stable while registered.

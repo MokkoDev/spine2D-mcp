@@ -29,11 +29,8 @@ const validPoint = (p: unknown): p is Point => Array.isArray(p) && p.length === 
 const safeImage = (name: string) => !!name && !isAbsolute(name) && !name.split(/[\\/]/).includes("..") && !name.includes("\0") && /\.png$/i.test(name);
 const fixed = (n: number) => Math.abs(n) < 1e-10 ? 0 : Number(n.toFixed(9));
 const rad = (deg: number) => deg * Math.PI / 180;
-const deg = (radians: number) => radians * 180 / Math.PI;
-const add = (a: Point, b: Point): Point => [a[0] + b[0], a[1] + b[1]];
 const sub = (a: Point, b: Point): Point => [a[0] - b[0], a[1] - b[1]];
 const rotate = (a: Point, angle: number): Point => [a[0] * Math.cos(angle) - a[1] * Math.sin(angle), a[0] * Math.sin(angle) + a[1] * Math.cos(angle)];
-const centered = (p: Point, part: RigPart): Point => [p[0] - part.width / 2, part.height / 2 - p[1]];
 const ptr = (...parts: (string | number)[]) => `/${parts.map((p) => String(p).replaceAll("~", "~0").replaceAll("/", "~1")).join("/")}`;
 
 export async function readImageInfo(imagesDir: string, image: string): Promise<ImageInfo> {
@@ -197,6 +194,43 @@ export async function validateRigManifest(manifest: RigManifest, path: string) {
     errors: diagnostics.filter((d) => d.severity === "error"), visualWarnings: diagnostics.filter((d) => d.severity === "warning"), images };
 }
 export interface PartPlacement { id: string; pivot: Point; tip: Point; center: Point; boneAngleDeg: number; imageAngleDeg: number; landmarks: Record<string, Point> }
+// Keep this function self-contained: rig-review embeds its compiled JavaScript in the browser editor.
+export function calculateRigPlacements(manifest: RigManifest, rotations: Record<string, number> = {}): Record<string, PartPlacement> {
+  const byId = new Map(manifest.parts.map((part) => [part.id, part]));
+  const placed: Record<string, PartPlacement> = Object.create(null) as Record<string, PartPlacement>;
+  function place(id: string, seen = new Set<string>()): PartPlacement | undefined {
+    if (placed[id]) return placed[id];
+    if (seen.has(id)) return undefined;
+    seen.add(id);
+    const part = byId.get(id);
+    if (!part || (!part.parent && id !== manifest.root.part)) return undefined;
+    const parent = part.parent ? place(part.parent.part, new Set(seen)) : undefined;
+    if (part.parent && !parent) return undefined;
+    const anchor = parent ? parent.landmarks[part.parent!.landmark] : manifest.root.world;
+    const pivot = part.landmarks?.[part.pivot];
+    const tip = part.landmarks?.[part.tip];
+    if (!anchor || !pivot || !tip) return undefined;
+    const angle = (part.setupRotationDeg + (rotations[id] ?? 0)
+      + (parent ? parent.imageAngleDeg - byId.get(parent.id)!.setupRotationDeg : 0)) * Math.PI / 180;
+    const centered = (p: Point): Point => [p[0] - part.width / 2, part.height / 2 - p[1]];
+    const rotatePoint = (p: Point): Point => [p[0] * Math.cos(angle) - p[1] * Math.sin(angle),
+      p[0] * Math.sin(angle) + p[1] * Math.cos(angle)];
+    const offset = rotatePoint(centered(pivot));
+    const center: Point = [anchor[0] - offset[0], anchor[1] - offset[1]];
+    const landmarks: Record<string, Point> = {};
+    for (const [name, point] of Object.entries(part.landmarks)) {
+      const rotated = rotatePoint(centered(point));
+      landmarks[name] = [center[0] + rotated[0], center[1] + rotated[1]];
+    }
+    const worldTip = landmarks[part.tip];
+    return placed[id] = { id, pivot: anchor, tip: worldTip, center,
+      imageAngleDeg: angle * 180 / Math.PI,
+      boneAngleDeg: Math.atan2(worldTip[1] - anchor[1], worldTip[0] - anchor[0]) * 180 / Math.PI,
+      landmarks };
+  }
+  for (const part of manifest.parts) place(part.id);
+  return placed;
+}
 function opaqueSeamDistance(parentImage: ImageInfo, parent: PartPlacement, childImage: ImageInfo, child: PartPlacement): number {
   const joint = child.pivot;
   function points(image: ImageInfo, placement: PartPlacement): Point[] {
@@ -217,21 +251,12 @@ function opaqueSeamDistance(parentImage: ImageInfo, parent: PartPlacement, child
   return min;
 }
 export function assembleRig(manifest: RigManifest, rotations: Record<string, number> = {}): PartPlacement[] {
-  const byId = new Map(manifest.parts.map((part) => [part.id, part]));
-  const done = new Map<string, PartPlacement>();
-  function place(id: string): PartPlacement {
-    const prior = done.get(id); if (prior) return prior;
-    const part = byId.get(id); if (!part) throw new SpineError("INVALID_RIG_MANIFEST", `Unknown part ${id}.`);
-    const parent = part.parent ? place(part.parent.part) : undefined;
-    const B = parent ? parent.landmarks[part.parent!.landmark] : manifest.root.world;
-    const phi = rad(part.setupRotationDeg + (rotations[id] ?? 0) + (parent ? parent.imageAngleDeg - byId.get(parent.id)!.setupRotationDeg : 0));
-    const C = sub(B, rotate(centered(part.landmarks[part.pivot], part), phi));
-    const landmarks = Object.fromEntries(Object.entries(part.landmarks).map(([name, p]) => [name, add(C, rotate(centered(p, part), phi))])) as Record<string, Point>;
-    const T = landmarks[part.tip];
-    const result = { id, pivot: B, tip: T, center: C, boneAngleDeg: deg(Math.atan2(T[1] - B[1], T[0] - B[0])), imageAngleDeg: deg(phi), landmarks };
-    done.set(id, result); return result;
-  }
-  return manifest.parts.map((part) => place(part.id));
+  const placed = calculateRigPlacements(manifest, rotations);
+  return manifest.parts.map((part) => {
+    const result = placed[part.id];
+    if (!result) throw new SpineError("INVALID_RIG_MANIFEST", `Part ${part.id} is not connected to the rig root or has an invalid landmark.`);
+    return result;
+  });
 }
 export function compileRig(manifest: RigManifest, manifestPath: string, outputDataPath: string) {
   const placements = assembleRig(manifest);
