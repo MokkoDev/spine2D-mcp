@@ -5,6 +5,23 @@ project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 startup="$project_dir/startup.sh"
 server_name="spine2d-mcp"
 cli_path_file="$project_dir/.spine2d-mcp-cli-path"
+scope_dir=""
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  printf 'Usage: %s\n' "$0"
+  printf 'Enter a directory when prompted to register there; press Enter to register globally.\n'
+  exit 0
+fi
+if (( $# != 0 )); then
+  printf 'Usage: %s (enter the scope directory at the prompt)\n' "$0" >&2
+  exit 1
+fi
+printf 'MCP scope directory (Enter for global): '
+IFS= read -r scope_input || true
+if [[ ! -t 0 ]]; then printf '\n'; fi
+if [[ -n "$scope_input" ]]; then
+  scope_dir="$(cd -- "$scope_input" && pwd -P)" || exit 1
+fi
 
 for program in node npm codex claude; do
   if ! command -v "$program" >/dev/null 2>&1; then
@@ -16,7 +33,7 @@ done
 # Check both clients before changing either registration. Existing entries with
 # this name must point at this checkout, so another server is never replaced.
 codex_registered=0
-if codex_details="$(codex mcp get --json "$server_name" 2>/dev/null)"; then
+if codex_details="$(cd / && codex mcp get --json "$server_name" 2>/dev/null)"; then
   if [[ "$codex_details" != *"$startup"* ]]; then
     printf 'Codex already has a different MCP server named %s.\n' "$server_name" >&2
     exit 1
@@ -25,7 +42,7 @@ if codex_details="$(codex mcp get --json "$server_name" 2>/dev/null)"; then
 fi
 
 claude_registered=0
-if claude_details="$(claude mcp get "$server_name" 2>/dev/null)"; then
+if claude_details="$(cd / && claude mcp get "$server_name" 2>/dev/null)"; then
   if [[ "$claude_details" != *"$startup"* ]]; then
     printf 'Claude already has a different MCP server named %s.\n' "$server_name" >&2
     exit 1
@@ -78,27 +95,41 @@ npm ci
 npm test
 
 node_bin="$(command -v node)"
-codex_env_args=(--env "SPINE2D_MCP_NODE=$node_bin")
-claude_env_args=(-e "SPINE2D_MCP_NODE=$node_bin")
-codex_added=0
-if (( ! codex_registered )); then
-  codex mcp add "$server_name" "${codex_env_args[@]}" -- "$startup"
-  codex_added=1
-fi
+if [[ -n "$scope_dir" ]]; then
+  bash "$project_dir/scripts/mcp_scope.sh" install "$scope_dir" "$server_name" "$startup" "$node_bin"
+  if (( codex_registered )); then
+    (cd / && codex mcp remove "$server_name")
+  fi
+  if (( claude_registered )); then
+    (cd / && claude mcp remove --scope user "$server_name")
+  fi
+else
+  codex_env_args=(--env "SPINE2D_MCP_NODE=$node_bin")
+  claude_env_args=(-e "SPINE2D_MCP_NODE=$node_bin")
+  codex_added=0
+  if (( ! codex_registered )); then
+    (cd / && codex mcp add "$server_name" "${codex_env_args[@]}" -- "$startup")
+    codex_added=1
+  fi
 
-if (( ! claude_registered )); then
-  if ! claude mcp add --scope user "$server_name" "${claude_env_args[@]}" -- "$startup"; then
-    if (( codex_added )); then
-      codex mcp remove "$server_name" || true
+  if (( ! claude_registered )); then
+    if ! (cd / && claude mcp add --scope user "$server_name" "${claude_env_args[@]}" -- "$startup"); then
+      if (( codex_added )); then
+        (cd / && codex mcp remove "$server_name") || true
+      fi
+      printf 'Claude registration failed. Any new Codex registration was rolled back.\n' >&2
+      exit 1
     fi
-    printf 'Claude registration failed. Any new Codex registration was rolled back.\n' >&2
-    exit 1
   fi
 fi
 
 printf '%s\n' "$spine_cli" > "$cli_path_file"
 
-printf 'Installed %s for Codex and Claude Code.\n' "$server_name"
+if [[ -n "$scope_dir" ]]; then
+  printf 'Installed %s for Codex and Claude Code under %s.\n' "$server_name" "$scope_dir"
+else
+  printf 'Installed %s for Codex and Claude Code globally.\n' "$server_name"
+fi
 if [[ -n "$spine_cli" ]]; then
   printf 'Spine CLI path saved for startup.sh: %s\n' "$spine_cli"
 else

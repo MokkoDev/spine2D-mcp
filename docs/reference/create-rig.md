@@ -1,5 +1,7 @@
 # Create a skeleton and rig
 
+Before creating or changing a rig, show the proposed bone hierarchy, joint positions, attachment placement, and draw order. Ask the user to confirm before applying rig changes unless they already confirmed those details. Use the rig review tools when applicable; a rendered preview does not replace confirmation.
+
 Create editable JSON without Spine using `spine_create_skeleton`:
 
 ```json

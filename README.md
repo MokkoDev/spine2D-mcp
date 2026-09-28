@@ -15,6 +15,8 @@ Spine is optional for JSON work. Creating `.spine` projects and rendering PNG pr
 ./install.sh
 ```
 
+The installer asks for a scope directory. Press Enter for global registration, or enter a directory such as `/work/Projects/Gamedev` to make the server available only there and in its subdirectories, including existing nested Git repositories.
+
 When asked, enter the Spine executable or installation directory. On the first install, press Enter to skip it if you only need JSON tools. On later runs, Enter keeps the saved path and `-` clears it. For an unattended install, set the path first:
 
 ```sh
@@ -22,6 +24,9 @@ SPINE_CLI_PATH=/absolute/path/to/Spine.sh ./install.sh
 ```
 
 The installer registers this checkout with Codex and Claude Code. Keep the checkout at the same path, and restart any open client session after installing.
+Scoped installation uses Bash, Git, Codex, and Claude Code. It creates local `.codex/config.toml` and `.mcp.json` files in the chosen directory, adds Codex config links in existing nested Git repositories, and trusts those repositories in Codex. Claude Code may ask you to approve a new project MCP server the first time you use it. The generated `.codex/` directory is ignored by Git. Rerun the scoped installer after adding a new nested Git repository.
+
+Run `./uninstall.sh` and press Enter to remove global registrations and build files, or enter a directory to remove only this server from that scope. Scoped uninstall keeps the runtime because another scope may use it.
 
 ## Run
 
