@@ -168,12 +168,10 @@ prepare_user_codex_config() {
   validation_home="$(mktemp -d "$user_codex_dir/.mcp-scope-validate.XXXXXX")"
   cp -- "$work_config" "$validation_home/config.toml"
   if ! (cd / && CODEX_HOME="$validation_home" codex mcp list --json >/dev/null 2>&1); then
-    rm -f -- "$validation_home/config.toml"
-    rmdir -- "$validation_home"
+    rm -rf -- "$validation_home"
     fail "Cannot safely update $user_codex_config"
   fi
-  rm -f -- "$validation_home/config.toml"
-  rmdir -- "$validation_home"
+  rm -rf -- "$validation_home"
   if [[ ! -f "$user_codex_config" ]] || ! cmp -s -- "$work_config" "$user_codex_config"; then
     mv -- "$work_config" "$user_codex_config"
     work_config=''
