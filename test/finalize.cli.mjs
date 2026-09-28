@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -9,6 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { PNG } from "pngjs";
 
 import { skeletonText } from "../dist/spine/create.js";
+import { exportData, importData } from "../dist/spine/cli.js";
 
 const serverPath = new URL("../startup.sh", import.meta.url).pathname;
 
@@ -58,6 +59,7 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
     assert.equal(response.isError, undefined, response.content?.[0]?.text);
     const result = JSON.parse(response.content[0].text);
     assert.equal(result.verified, true);
+    assert.equal(result.projectMode, "created");
     assert.equal(result.fidelity.differenceCount, 0);
     assert.ok(result.projectPath.endsWith(".spine"));
     assert.ok(result.frameCount >= 3);
@@ -80,6 +82,57 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
     assert.equal(effectivePreview.skinType, "current");
     assert.equal(effectivePreview.animation, "turn");
     assert.equal(createHash("sha256").update(await readFile(dataPath)).digest("hex"), sourceHash);
+
+    const baseline = structuredClone(data);
+    delete baseline.animations.turn;
+    const baselinePath = join(sourceDir, "baseline.json");
+    const projectDir = version === "4.2" ? join(directory, "alternate") : sourceDir;
+    await mkdir(projectDir, { recursive: true });
+    const existingProjectPath = join(projectDir, "rig.spine");
+    const existingProjectInput = version === "4.2" ? { existingProjectPath } : {};
+    await writeFile(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+    await importData(baselinePath, existingProjectPath, "rig", version, 120_000);
+    const beforeProject = await readFile(existingProjectPath);
+    const updatedResponse = await client.callTool({ name: "spine_finalize_animation", arguments: {
+      dataPath, dataSettingsPath, previewSettingsPath, outputDir: join(directory, "updated-deliveries"),
+      editorVersion: version, animation: "turn", samples: 3, ...existingProjectInput,
+    } });
+    assert.equal(updatedResponse.isError, undefined, updatedResponse.content?.[0]?.text);
+    const updated = JSON.parse(updatedResponse.content[0].text);
+    assert.equal(updated.projectMode, "updated");
+    assert.equal(updated.projectPath, existingProjectPath);
+    assert.deepEqual(await readFile(updated.backupPath), beforeProject);
+    const exportedUpdated = await exportData(existingProjectPath, dataSettingsPath,
+      join(directory, "verify-updated"), version, 120_000);
+    assert.ok(JSON.parse(await readFile(exportedUpdated.files[0], "utf8")).animations.turn);
+
+    const isolatedDir = join(directory, "isolated", "nested");
+    const isolatedProjectPath = join(isolatedDir, "rig.spine");
+    await mkdir(isolatedDir, { recursive: true });
+    await copyFile(existingProjectPath, isolatedProjectPath);
+    const missingImages = await client.callTool({ name: "spine_finalize_animation", arguments: {
+      dataPath, dataSettingsPath, previewSettingsPath, outputDir: join(directory, "missing-images-deliveries"),
+      editorVersion: version, animation: "turn", samples: 3,
+      existingProjectPath: isolatedProjectPath,
+    } });
+    assert.equal(missingImages.isError, true);
+    assert.match(missingImages.content[0].text, /MISSING_IMAGES/);
+
+    const updatedHash = createHash("sha256").update(await readFile(existingProjectPath)).digest("hex");
+    const incompatible = structuredClone(data);
+    incompatible.bones[0].x = 5;
+    await writeFile(dataPath, `${JSON.stringify(incompatible, null, 2)}\n`);
+    try {
+      const mismatch = await client.callTool({ name: "spine_finalize_animation", arguments: {
+        dataPath, dataSettingsPath, previewSettingsPath, outputDir: join(directory, "mismatch-deliveries"),
+        editorVersion: version, animation: "turn", samples: 3, ...existingProjectInput,
+      } });
+      assert.equal(mismatch.isError, true);
+      assert.match(mismatch.content[0].text, /EXISTING_PROJECT_MISMATCH/);
+      assert.equal(createHash("sha256").update(await readFile(existingProjectPath)).digest("hex"), updatedHash);
+    } finally {
+      await writeFile(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+    }
   } finally {
     await client.close().catch(() => undefined);
     await rm(directory, { recursive: true, force: true });

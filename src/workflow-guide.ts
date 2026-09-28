@@ -59,7 +59,7 @@ const WORKFLOWS = {
     needs: ["reviewed Spine JSON", "saved JSON and PNG export settings", "animation name",
       "images or an atlas", "licensed Spine CLI and display/OpenGL"],
     steps: ["After reviewing and committing the JSON, call spine_finalize_animation once with its path and export settings.",
-      "The tool imports a new .spine project, verifies its JSON re-export, renders frames, and creates a contact sheet and HTML player.",
+      "The tool verifies the JSON re-export, renders frames, and creates a contact sheet and HTML player. It updates a matching existing .spine project after verification, or creates one when none exists.",
       "Deliver projectPath, htmlPath, and contactSheetPath together; inspect the returned previewReview."],
   },
   new_motion: {

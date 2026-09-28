@@ -132,7 +132,7 @@ export const IMPLEMENTED_TOOLS: readonly ToolCapability[] = [
   { name: TOOL_NAMES.cleanupAnimations, status: "implemented", area: "Project and files", backend: "cli", purpose: "Clean all project animations through Spine CLI into a new project file." },
   { name: TOOL_NAMES.previewEdit, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Stage an atomic edit batch with diff and validation." },
   { name: TOOL_NAMES.roundTripEdit, status: "implemented", area: "Animation workflow", backend: "json+cli", purpose: "Export with nonessential data, stage edits, import and re-export a new project, validate it, and compare rendered frames." },
-  { name: TOOL_NAMES.finalizeAnimation, status: "implemented", area: "Animation workflow", backend: "json+cli", purpose: "Finalize reviewed JSON into a verified .spine project with rendered frames, a contact sheet, and HTML player." },
+  { name: TOOL_NAMES.finalizeAnimation, status: "implemented", area: "Animation workflow", backend: "json+cli", purpose: "Update a matching existing .spine project or create one from reviewed JSON, with verified previews." },
   { name: TOOL_NAMES.retimeAnimation, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Stage a whole-animation retime." },
   { name: TOOL_NAMES.cloneAnimation, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Create a new animation variant with all key and curve times transformed." },
   { name: TOOL_NAMES.reverseBoneAnimation, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Reverse continuous bone motion and event timing into a new animation." },

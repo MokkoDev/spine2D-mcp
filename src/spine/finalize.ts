@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { cp, copyFile, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { cp, copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { inspectAssets } from "./assets.js";
 import { exportData, importData, packAtlas, renderPreview } from "./cli.js";
-import { readDocument } from "./document.js";
+import { readDocument, type SpineDocument } from "./document.js";
 import { SpineError } from "./errors.js";
 import { compareSemanticFidelity } from "./fidelity.js";
 import { inspectAnimation } from "./inspect.js";
@@ -29,6 +30,7 @@ export interface FinalizeAnimationInput {
   timeoutMs?: number;
   runtimeJsPath?: string;
   runtimeCssPath?: string;
+  existingProjectPath?: string;
 }
 
 async function hashFile(path: string): Promise<string> {
@@ -53,6 +55,35 @@ async function copyImages(configured: string, source: string, targetJson: string
   return destination;
 }
 
+function withoutAnimation(document: SpineDocument, animation: string): SpineDocument {
+  const animations = document.data.animations as Record<string, unknown> | undefined;
+  return { ...document, data: { ...document.data, animations: Object.fromEntries(
+    Object.entries(animations ?? {}).filter(([name]) => name !== animation)) } };
+}
+
+async function publishExistingProject(existingPath: string, expectedHash: string,
+  importedPath: string, importedHash: string, runDir: string): Promise<string> {
+  const backupPath = join(runDir, "existing-project-before.spine");
+  const temporaryPath = join(dirname(existingPath), `.spine2d-finalize-${randomUUID()}.spine`);
+  if (await hashFile(existingPath) !== expectedHash) {
+    throw new SpineError("SOURCE_CHANGED", "The existing Spine project changed during finalization.");
+  }
+  await copyFile(existingPath, backupPath, constants.COPYFILE_EXCL);
+  if (await hashFile(backupPath) !== expectedHash) {
+    throw new SpineError("SOURCE_CHANGED", "The existing Spine project changed while its backup was created.");
+  }
+  try {
+    await copyFile(importedPath, temporaryPath, constants.COPYFILE_EXCL);
+    if (await hashFile(temporaryPath) !== importedHash || await hashFile(existingPath) !== expectedHash) {
+      throw new SpineError("SOURCE_CHANGED", "A Spine project changed before the existing project could be updated.");
+    }
+    await rename(temporaryPath, existingPath);
+    return backupPath;
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
+}
+
 export async function finalizeAnimation(input: FinalizeAnimationInput) {
   const source = await readDocument(input.dataPath);
   const sourceDiagnostics = validateDocument(source);
@@ -60,6 +91,23 @@ export async function finalizeAnimation(input: FinalizeAnimationInput) {
     throw new SpineError("VALIDATION_FAILED", "The reviewed JSON has validation errors.", { diagnostics: sourceDiagnostics });
   }
   const reviewedAnimation = inspectAnimation(source, input.animation);
+  const siblingProjectPath = resolve(dirname(source.path), `${basename(source.path, extname(source.path))}.spine`);
+  const selectedProjectPath = resolve(input.existingProjectPath ?? siblingProjectPath);
+  if (extname(selectedProjectPath).toLowerCase() !== ".spine") {
+    throw new SpineError("INVALID_PROJECT_PATH", "An existing project path must end in .spine.");
+  }
+  const selectedProjectStat = await lstat(selectedProjectPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (input.existingProjectPath && !selectedProjectStat) {
+    throw new SpineError("PROJECT_NOT_FOUND", `Spine project does not exist: ${selectedProjectPath}.`);
+  }
+  if (selectedProjectStat && (!selectedProjectStat.isFile() || selectedProjectStat.isSymbolicLink())) {
+    throw new SpineError("INVALID_PROJECT_PATH", "The existing Spine project must be a regular file.",
+      { projectPath: selectedProjectPath });
+  }
+  const existingProjectPath = selectedProjectStat ? selectedProjectPath : undefined;
   const configured = (source.data.skeleton as Record<string, unknown> | undefined)?.images;
   const configuredImages = typeof configured === "string" ? configured : "./images/";
   const sourceImages = resolve(input.imagesDir ?? (isAbsolute(configuredImages)
@@ -82,6 +130,8 @@ export async function finalizeAnimation(input: FinalizeAnimationInput) {
   await mkdir(outputRoot, { recursive: true });
   const runDir = await mkdtemp(join(outputRoot, "spine-final-"));
   let step = "prepare";
+  let publishedBackupPath: string | undefined;
+  let importedProjectHash: string | undefined;
   try {
     const projectDir = join(runDir, "project");
     await mkdir(projectDir);
@@ -99,10 +149,45 @@ export async function finalizeAnimation(input: FinalizeAnimationInput) {
       rangeStart: -1, rangeEnd: -1, frameStart: -1, frameEnd: -1 }, null, 2)}\n`, { flag: "wx" });
     if (assets.referenceCount) await copyImages(configuredImages, sourceImages, reviewedJsonPath, runDir);
 
+    let existingProjectHash: string | undefined;
+    if (existingProjectPath) {
+      step = "verify-existing-project";
+      const projectImages = isAbsolute(configuredImages) ? resolve(configuredImages)
+        : resolve(dirname(existingProjectPath), configuredImages);
+      const projectAssets = await inspectAssets(source, projectImages);
+      if (projectAssets.missingCount) {
+        throw new SpineError("MISSING_IMAGES", "The existing project would have missing attachment images.",
+          { projectPath: existingProjectPath, imagesDir: projectImages,
+            missingCount: projectAssets.missingCount, missing: projectAssets.missing });
+      }
+      existingProjectHash = await hashFile(existingProjectPath);
+      const existingExport = await exportData(existingProjectPath, dataSettingsPath, runDir,
+        input.editorVersion, input.timeoutMs);
+      if (existingExport.files.length !== 1 || basename(existingExport.files[0], ".json") !== skeletonName) {
+        throw new SpineError("EXISTING_PROJECT_MISMATCH",
+          "The existing project must contain exactly the skeleton named by the reviewed JSON.",
+          { projectPath: existingProjectPath, exportedFiles: existingExport.files });
+      }
+      const existingDocument = await readDocument(existingExport.files[0]);
+      const existingDiagnostics = validateDocument(existingDocument);
+      if (existingDiagnostics.some((item) => item.severity === "error")) {
+        throw new SpineError("VALIDATION_FAILED", "The existing project exported invalid JSON.",
+          { diagnostics: existingDiagnostics });
+      }
+      const compatibility = compareSemanticFidelity(
+        withoutAnimation(source, input.animation), withoutAnimation(existingDocument, input.animation));
+      if (compatibility.differenceCount) {
+        throw new SpineError("EXISTING_PROJECT_MISMATCH",
+          "The existing project differs from the reviewed JSON outside the selected animation.",
+          { projectPath: existingProjectPath, compatibility });
+      }
+    }
+
     step = "import";
     await importData(reviewedJsonPath, projectPath, skeletonName,
       input.editorVersion, input.timeoutMs);
     const projectHash = await hashFile(projectPath);
+    importedProjectHash = projectHash;
 
     step = "verify-export";
     const exported = await exportData(projectPath, dataSettingsPath, runDir, input.editorVersion, input.timeoutMs);
@@ -157,12 +242,20 @@ export async function finalizeAnimation(input: FinalizeAnimationInput) {
       || await hashFile(reexported.path) !== reexported.hash) {
       throw new SpineError("SOURCE_CHANGED", "A finalization input or output changed while the workflow ran.");
     }
+    if (existingProjectPath && existingProjectHash) {
+      step = "publish-existing-project";
+      publishedBackupPath = await publishExistingProject(existingProjectPath, existingProjectHash,
+        projectPath, projectHash, runDir);
+    }
     const manifestPath = join(runDir, "manifest.json");
     const manifest = { schemaVersion: 1, runId: randomUUID(), status: "complete",
       completedAt: new Date().toISOString(), editorVersion: input.editorVersion,
       reviewedJson: { path: source.path, sha256: source.hash },
       importedJson: { path: reviewedJsonPath, sha256: await hashFile(reviewedJsonPath) },
-      project: { path: projectPath, sha256: projectHash },
+      project: { path: existingProjectPath ?? projectPath, sha256: projectHash,
+        mode: existingProjectPath ? "updated" : "created", previousSha256: existingProjectHash,
+        backupPath: publishedBackupPath },
+      importedProject: { path: projectPath, sha256: projectHash },
       reexported: { path: reexported.path, sha256: reexported.hash, diagnostics, fidelity },
       animation: { name: input.animation, reviewed: reviewedAnimation, final: finalAnimation },
       settings: { data: { path: dataSettingsPath, sha256: await hashFile(dataSettingsPath) },
@@ -177,6 +270,16 @@ export async function finalizeAnimation(input: FinalizeAnimationInput) {
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
     return { runDir, manifestPath, manifest, rendered, sheet, player };
   } catch (error) {
+    if (publishedBackupPath && existingProjectPath && importedProjectHash
+      && await hashFile(existingProjectPath).catch(() => undefined) === importedProjectHash) {
+      const restorePath = join(dirname(existingProjectPath), `.spine2d-restore-${randomUUID()}.spine`);
+      try {
+        await copyFile(publishedBackupPath, restorePath, constants.COPYFILE_EXCL);
+        await rename(restorePath, existingProjectPath);
+      } finally {
+        await rm(restorePath, { force: true }).catch(() => undefined);
+      }
+    }
     await writeFile(join(runDir, "failure.json"), `${JSON.stringify({ status: "failed", step,
       failedAt: new Date().toISOString(), code: error instanceof SpineError ? error.code : "INTERNAL_ERROR",
       message: error instanceof Error ? error.message : String(error) }, null, 2)}\n`).catch(() => undefined);

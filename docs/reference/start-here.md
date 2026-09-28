@@ -10,6 +10,6 @@ For rigging from separate images, follow [Create a skeleton and rig](create-rig.
 4. Save the chosen stage with `spine_commit_edit({"editId":"<editId>"})`. Commit checks the source hash and stores before and after copies plus a manifest under `.spine2d-mcp/history/` beside the JSON.
 
 For an existing `.spine` project that must return to the editor, follow [Edit an existing Spine project](round-trip.md).
-For final delivery of a reviewed JSON animation with a native project, HTML preview, and contact sheet, use `spine_finalize_animation` as described in that guide.
+For final delivery of a reviewed JSON animation with a native project, HTML preview, and contact sheet, use `spine_finalize_animation` as described in that guide. It updates a matching sibling `.spine` project when one exists.
 
 Find one detailed guide with `spine_search_reference({"query":"retime animation"})`, then fetch its slug with `spine_get_reference` or read the returned `spine-docs://reference/...` resource. Use `spine_capabilities` to find a specialized typed tool; [FUNCTIONS.md](../../FUNCTIONS.md) lists exact inputs and limits.

@@ -1072,10 +1072,11 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.finalizeAnimation,
     {
-      description: "Deliver a reviewed Spine JSON animation in one call: import a new .spine project, verify its re-export, render frames, and return both an HTML player and contact sheet. No existing project is overwritten.",
+      description: "Deliver a reviewed Spine JSON animation: update a matching sibling .spine project when it exists, or create one when it does not. Verify the re-export, render frames, and return an HTML player and contact sheet. An updated project is backed up in the run directory.",
       inputSchema: z.object({ dataPath: z.string().min(1), dataSettingsPath: z.string().min(1),
         previewSettingsPath: z.string().min(1), outputDir: z.string().min(1),
         editorVersion: z.enum(["4.2", "4.3"]), animation: z.string().min(1),
+        existingProjectPath: z.string().min(1).optional(),
         atlasPath: z.string().min(1).optional(), imagesDir: z.string().min(1).optional(),
         skin: z.string().min(1).optional(), fps: z.number().int().min(1).max(120).optional(),
         display: z.string().min(1).max(255).optional(), samples: z.number().int().min(1).max(12).optional(),
@@ -1096,6 +1097,7 @@ export function createServer(): McpServer {
         index, uri: `spine-preview://${framePreview.previewId}/${index}` }));
       return { runDir: result.runDir, manifestPath: result.manifestPath,
         projectPath: result.manifest.project.path, reexportedJsonPath: result.manifest.reexported.path,
+        projectMode: result.manifest.project.mode, backupPath: result.manifest.project.backupPath,
         verified: true, fidelity: result.manifest.reexported.fidelity,
         animation: { name: input.animation, duration: finalAnimation.duration,
           timelineCount: finalAnimation.timelineCount, keyCount: finalAnimation.keyCount },

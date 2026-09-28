@@ -23,7 +23,7 @@ For JSON only, start with [Start here](start-here.md). Exact fields: [FUNCTIONS.
 
 ## Final delivery from reviewed JSON
 
-Once the JSON has been reviewed and committed, call `spine_finalize_animation` to create the native project and both previews in one run:
+Once the JSON has been reviewed and committed, call `spine_finalize_animation` to update a matching native project and create both previews in one run:
 
 ```json
 {
@@ -37,4 +37,6 @@ Once the JSON has been reviewed and committed, call `spine_finalize_animation` t
 }
 ```
 
-The tool imports a new `.spine` project, re-exports its JSON, and requires semantic fidelity with the reviewed source. It selects the imported skeleton name for PNG rendering even if the saved settings refer to an older project. It renders the final project, samples a contact sheet, and builds a standalone HTML Web Player preview from the verified re-export. If `atlasPath` is omitted, it packs an atlas from the image directory. Use `imagesDir` if the source JSON's image path cannot be resolved. Deliver `projectPath`, `htmlPath`, and `contactSheetPath` from the same result. The response includes a compact animation summary and sampled frame URIs; the complete manifest retains timeline and render details. A failed run has `failure.json` and does not report success. The generated project and previews live in a new run directory; existing files are not replaced.
+If a `.spine` project with the JSON file's basename exists beside the JSON, finalization uses that project as the output. Pass `existingProjectPath` to select a matching project in another directory. The server first exports the existing project and requires all data outside the selected animation to match the reviewed JSON. Attachment images must also resolve from the existing project's location. It then imports and verifies the updated project, renders it, and replaces the existing `.spine` file only after every review step succeeds. The previous native project is backed up in the run directory. If no matching project exists, finalization creates one in the run directory. A mismatch fails without changing the existing project.
+
+The tool selects the imported skeleton name for PNG rendering even if the saved settings refer to an older project. It samples a contact sheet and builds a standalone HTML Web Player preview from the verified re-export. If `atlasPath` is omitted, it packs an atlas from the image directory. Use `imagesDir` if the source JSON's image path cannot be resolved. Deliver `projectPath`, `htmlPath`, and `contactSheetPath` from the same result. The response includes `projectMode` (`updated` or `created`), a backup path when updated, a compact animation summary, and sampled frame URIs. The complete manifest retains timeline and render details. A failed run has `failure.json` and does not report success.

@@ -45,7 +45,7 @@ The server waits for an MCP client on standard input. To run the built version, 
 
 Follow the [start-here guide](docs/reference/start-here.md) or read its MCP resource `spine-docs://reference/start-here` for the inspect, edit, preview, and commit sequence. Call `spine_search_reference` with a task or tool name, then fetch the returned slug with `spine_get_reference` or read its resource URI for focused examples. `spine_workflow_guide` with `goal: "choose"` gives task-based entry points; `spine_capabilities` finds specialized typed tools. [FUNCTIONS.md](FUNCTIONS.md) is the full schema and limits catalog.
 
-For final animation delivery, `spine_finalize_animation` takes reviewed JSON and returns a verified `.spine` project, rendered frames, a contact sheet, and an HTML player preview in one result. See the [final delivery guide](docs/reference/round-trip.md#final-delivery-from-reviewed-json).
+For final animation delivery, `spine_finalize_animation` takes reviewed JSON, updates a matching existing `.spine` project when present, and returns rendered frames, a contact sheet, and an HTML player preview in one result. See the [final delivery guide](docs/reference/round-trip.md#final-delivery-from-reviewed-json).
 
 ### Deferred tool search in supporting clients
 
