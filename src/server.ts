@@ -893,14 +893,15 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_preview_edit",
     {
-      description: "Stage up to 20 coordinated edits to one skeleton JSON as one validated change. For one simple operation, use its named spine edit tool; save either result with spine_commit_edit.",
+      description: "Stage up to 20 coordinated edits to one skeleton JSON as one validated change. Pass baseEditId to revise an uncommitted stage; render each editId and commit the chosen result.",
       inputSchema: z.object({
         path: z.string().min(1),
         operations: z.array(operationSchema).min(1).max(20),
         requestId: z.string().min(1).max(128).optional(),
+        baseEditId: z.uuid().optional(),
       }),
     },
-    async ({ path, operations, requestId }) => runTool(async () => ({ ...(await edits.preview(path, operations, requestId)) })),
+    async ({ path, operations, requestId, baseEditId }) => runTool(async () => ({ ...(await edits.preview(path, operations, requestId, baseEditId)) })),
   );
 
   server.registerTool(
@@ -1681,9 +1682,18 @@ export function createServer(): McpServer {
   server.registerResource(
     "staged-edit-changes",
     new ResourceTemplate("spine-edit://{editId}/changes", { list: undefined }),
-    { title: "Full staged edit diff", mimeType: "application/json" },
+    { title: "Full staged edit step history", mimeType: "application/json" },
     async (uri, { editId }) => ({
       contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(edits.changes(String(editId))) }],
+    }),
+  );
+
+  server.registerResource(
+    "staged-edit-net-changes",
+    new ResourceTemplate("spine-edit://{editId}/net-changes", { list: undefined }),
+    { title: "Full staged edit source-to-result diff", mimeType: "application/json" },
+    async (uri, { editId }) => ({
+      contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(edits.netChanges(String(editId))) }],
     }),
   );
 

@@ -11,7 +11,7 @@ export const SERVER_INSTRUCTIONS = [
   CLEANUP_GUIDANCE,
   RIG_ASSEMBLY_RULE,
   RIG_READY_NEXT_ACTION,
-  "For related JSON changes, spine_preview_edit stages a validated edit. Review diagnostics and diff before spine_commit_edit saves it.",
+  "For related JSON changes, spine_preview_edit stages a validated edit. Revise with baseEditId, review diagnostics and the net diff, then commit the chosen editId.",
 ].join(" ");
 
 const WORKFLOWS = {
@@ -58,7 +58,8 @@ const WORKFLOWS = {
     needs: ["Spine 4.2 or 4.3 skeleton JSON", "mapped rig bones or slot", "recipe parameters"],
     steps: ["spine_inspect_project to find valid rig names.", "spine_generate_motion to stage the clip.",
       "spine_render_staged_edit for frames; spine_analyze_motion_quality for walk/run contact intervals.",
-      "spine_commit_edit after reviewing the diff and frames."],
+      "Revise the staged result with spine_preview_edit using baseEditId; render each revision and review its net diff.",
+      "spine_commit_edit with only the chosen editId after reviewing its diff and frames."],
   },
   edit_json: {
     useWhen: "Make a coordinated JSON edit without running the full .spine round trip.",
@@ -68,7 +69,8 @@ const WORKFLOWS = {
       "For rig changes from separate images, follow the rig_review workflow before committing.",
       "Use a named spine edit tool for one operation, or spine_preview_edit to stage up to 20 related operations together.",
       "spine_compare_previews when PNG export settings and a licensed Spine CLI are available.",
-      "spine_commit_edit to save the selected stage."],
+      "For later edits, switch from named tools to spine_preview_edit with baseEditId; render revisions and review the net diff.",
+      "spine_commit_edit to save only the chosen editId."],
   },
   reuse_pose: {
     useWhen: "Capture a pose and apply it to another animation or compatible rig.",

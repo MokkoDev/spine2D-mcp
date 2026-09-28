@@ -35,6 +35,137 @@ test("staged edits, diffs, request IDs, and commits survive store restarts", asy
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("revisions branch from staged results and commit only the selected full result", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine2d-stage-revision-"));
+  const path = join(directory, "rig.json");
+  const options = { stateDir: join(directory, "state") };
+  const retime = (scale) => [{ kind: "retime_animation", animation: "walk", scale }];
+  try {
+    const original = fixture();
+    await writeFile(path, original);
+    const store = new EditStore(options);
+    const first = await store.preview(path, retime(2));
+    const second = await store.preview(path, retime(1.5), "revise", first.editId);
+    const third = await store.preview(path, retime(1.5), undefined, second.editId);
+    const branch = await store.preview(path, retime(2), undefined, first.editId);
+    assert.equal(second.baseEditId, first.editId);
+    assert.equal(second.sourceHash, first.sourceHash);
+    assert.equal(second.operations.length, 2);
+    assert.equal(second.summaries[1].beforeDuration, 2);
+    assert.equal(second.summaries[1].afterDuration, 3);
+    assert.equal(second.changeCount, 2);
+    assert.equal(JSON.parse(store.snapshot(second.editId).afterText).animations.walk.bones.arm.rotate[1].time, 3);
+    assert.equal(third.baseEditId, second.editId);
+    assert.equal(third.operations.length, 3);
+    assert.equal(third.summaries[2].beforeDuration, 3);
+    assert.equal(JSON.parse(store.snapshot(third.editId).afterText).animations.walk.bones.arm.rotate[1].time, 4.5);
+    assert.equal(JSON.parse(store.snapshot(branch.editId).afterText).animations.walk.bones.arm.rotate[1].time, 4);
+    assert.equal(await readFile(path, "utf8"), original);
+
+    const restarted = new EditStore(options);
+    assert.equal((await restarted.preview(path, retime(1.5), "revise", first.editId)).editId, second.editId);
+    await assert.rejects(restarted.preview(path, retime(2), "revise", first.editId), { code: "IDEMPOTENCY_CONFLICT" });
+    await assert.rejects(restarted.preview(path, [...retime(2), ...retime(1.5)], "revise", first.editId), { code: "IDEMPOTENCY_CONFLICT" });
+    await assert.rejects(restarted.preview(path, retime(1.5), "revise", branch.editId), { code: "IDEMPOTENCY_CONFLICT" });
+    const committed = await restarted.commit(third.editId);
+    assert.equal(JSON.parse(await readFile(path, "utf8")).animations.walk.bones.arm.rotate[1].time, 4.5);
+    assert.equal(await readFile(committed.backupPath, "utf8"), original);
+    const manifest = JSON.parse(await readFile(committed.manifestPath, "utf8"));
+    assert.equal(manifest.baseEditId, second.editId);
+    assert.equal(manifest.operations.length, 3);
+    await assert.rejects(restarted.commit(branch.editId), { code: "SOURCE_CHANGED" });
+    await assert.rejects(restarted.commit(second.editId), { code: "SOURCE_CHANGED" });
+    await assert.rejects(restarted.commit(first.editId), { code: "SOURCE_CHANGED" });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a revision rejects a missing, different-file, or stale base stage", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine2d-stage-base-"));
+  const path = join(directory, "rig.json");
+  const otherPath = join(directory, "other.json");
+  const options = { stateDir: join(directory, "state") };
+  const operation = [{ kind: "retime_animation", animation: "walk", scale: 2 }];
+  try {
+    await writeFile(path, fixture());
+    await writeFile(otherPath, fixture());
+    const store = new EditStore(options);
+    const base = await store.preview(path, operation);
+    await assert.rejects(store.preview(path, operation, undefined, "00000000-0000-4000-8000-000000000000"), { code: "EDIT_NOT_FOUND" });
+    await assert.rejects(store.preview(otherPath, operation, undefined, base.editId), { code: "BASE_EDIT_MISMATCH" });
+    await writeFile(path, fixture().replace('"value": 20', '"value": 25'));
+    await assert.rejects(store.preview(path, operation, undefined, base.editId), { code: "SOURCE_CHANGED" });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("net diff shows the original and final key values while preserving every step", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine2d-net-diff-"));
+  const path = join(directory, "rig.json");
+  const store = new EditStore({ stateDir: join(directory, "state") });
+  const key = (value) => [{ kind: "set_keyframe", animation: "walk",
+    selector: { section: "bones", target: "arm", timelineType: "rotate" }, time: 0, values: { value } }];
+  try {
+    await writeFile(path, fixture());
+    const first = await store.preview(path, key(30));
+    const second = await store.preview(path, key(10), undefined, first.editId);
+    assert.equal(second.changeCount, 2);
+    assert.deepEqual(second.changes.map(({ before, after }) => [before.value, after.value]), [[0, 30], [30, 10]]);
+    assert.equal(second.netChangeCount, 1);
+    assert.deepEqual(second.netChanges, [{ path: "/animations/walk/bones/arm/rotate/0/value", before: 0, after: 10 }]);
+    assert.deepEqual(store.netChanges(second.editId).changes, second.netChanges);
+    const reverted = await store.preview(path, key(0), undefined, second.editId);
+    assert.equal(reverted.changeCount, 3);
+    assert.equal(reverted.netChangeCount, 0);
+    assert.deepEqual(store.netChanges(reverted.editId).changes, []);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("revision response keeps newest steps visible beyond 100 history entries", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine2d-revision-history-"));
+  const path = join(directory, "rig.json");
+  const store = new EditStore({ stateDir: join(directory, "state") });
+  const key = (value) => ({ kind: "set_keyframe", animation: "walk",
+    selector: { section: "bones", target: "arm", timelineType: "rotate" }, time: 0, values: { value } });
+  try {
+    await writeFile(path, fixture());
+    let stage;
+    for (let start = 1; start <= 101; start += 20) {
+      const operations = Array.from({ length: Math.min(20, 102 - start) }, (_, offset) => key(start + offset));
+      stage = await store.preview(path, operations, undefined, stage?.editId);
+    }
+    assert.equal(stage.changeCount, 101);
+    assert.equal(stage.changesOffset, 1);
+    assert.equal(stage.changes.length, 100);
+    assert.equal(stage.changes[0].after.value, 2);
+    assert.equal(stage.changes.at(-1).after.value, 101);
+    assert.deepEqual(stage.netChanges, [{ path: "/animations/walk/bones/arm/rotate/0/value", before: 0, after: 101 }]);
+    assert.equal(store.changes(stage.editId).changes.length, 101);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a child request retries after its parent expires", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine2d-child-retry-"));
+  const path = join(directory, "rig.json");
+  const stateDir = join(directory, "state");
+  const retime = (scale) => [{ kind: "retime_animation", animation: "walk", scale }];
+  try {
+    await writeFile(path, fixture());
+    const store = new EditStore({ stateDir });
+    const parent = await store.preview(path, retime(2));
+    const child = await store.preview(path, retime(1.5), "child-request", parent.editId);
+    const parentPath = join(stateDir, `${parent.editId}.json`);
+    const savedParent = JSON.parse(await readFile(parentPath, "utf8"));
+    savedParent.createdAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    await writeFile(parentPath, JSON.stringify(savedParent));
+
+    const restarted = new EditStore({ stateDir });
+    assert.equal((await restarted.preview(path, retime(1.5), "child-request", parent.editId)).editId, child.editId);
+    await assert.rejects(restarted.preview(path, retime(2), "child-request", parent.editId), { code: "IDEMPOTENCY_CONFLICT" });
+    await assert.rejects(restarted.preview(path, [...retime(2), ...retime(1.5)], "child-request", parent.editId), { code: "IDEMPOTENCY_CONFLICT" });
+    await assert.rejects(restarted.preview(path, retime(1.5), "new-request", parent.editId), { code: "EDIT_NOT_FOUND" });
+    assert.equal(JSON.parse(restarted.snapshot(child.editId).afterText).animations.walk.bones.arm.rotate[1].time, 3);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("failed final manifest write reports applied source and retry finalizes it", async () => {
   const directory = await mkdtemp(join(tmpdir(), "spine2d-finalize-retry-"));
   const path = join(directory, "rig.json");

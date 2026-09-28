@@ -1,6 +1,6 @@
 # Stage JSON edits
 
-Use a named edit tool for one action. For a coordinated change, `spine_preview_edit` stages 1–20 operations atomically and validates the result. Both return an `editId`, diagnostics, and `diffResourceUri`; neither writes the source JSON.
+Use a named edit tool for one action. For a coordinated change, `spine_preview_edit` stages 1–20 operations atomically and validates the result. Both return an `editId`, diagnostics, `diffResourceUri` for step history, and `netDiffResourceUri` for the source-to-result diff; neither writes the source JSON. For revisions after a named tool, use `spine_preview_edit` with that stage's `editId` as `baseEditId`.
 
 To slow a whole clip by 50%, call `spine_retime_animation`:
 

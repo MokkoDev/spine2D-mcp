@@ -107,6 +107,11 @@ test("stdio MCP handshake exposes and calls only implemented tools", { timeout: 
     assert.equal(guide.goal, "round_trip");
     assert.deepEqual(guide.primaryTools, ["spine_round_trip_edit"]);
     assert.ok(guide.steps.some((step) => step.includes("spine_round_trip_edit")));
+    for (const goal of ["edit_json", "new_motion"]) {
+      const revisionGuide = parseTextResult(await client.callTool({ name: "spine_workflow_guide", arguments: { goal } }));
+      assert.ok(revisionGuide.steps.some((step) => step.includes("baseEditId")));
+      assert.ok(revisionGuide.steps.some((step) => step.includes("chosen editId")));
+    }
   } finally {
     await client.close();
   }
@@ -356,6 +361,21 @@ test("inspect, validate, stage, and commit a full animation retime", { timeout: 
     assert.equal(fullDiff.editId, preview.editId);
     assert.equal(fullDiff.changes.length, preview.changeCount);
 
+    const revision = parseTextResult(await client.callTool({ name: "spine_preview_edit", arguments: {
+      path, baseEditId: preview.editId,
+      operations: [{ kind: "retime_animation", animation: "walk", scale: 1.5 }],
+    } }));
+    assert.equal(revision.baseEditId, preview.editId);
+    assert.equal(revision.summaries[1].beforeDuration, 1);
+    assert.equal(revision.summaries[1].afterDuration, 1.5);
+    assert.equal(revision.operations.length, 2);
+    const netDiff = JSON.parse((await client.readResource({ uri: revision.netDiffResourceUri })).contents[0].text);
+    assert.equal(netDiff.editId, revision.editId);
+    assert.equal(netDiff.changes.length, revision.netChangeCount);
+    assert.ok(netDiff.changes.some((change) => change.path === "/animations/walk/bones/arm/rotate/1/time"
+      && change.before === 0.5 && change.after === 1.5));
+    assert.equal(await readFile(path, "utf8"), original);
+
     const committed = parseTextResult(await client.callTool({ name: "spine_commit_edit", arguments: { editId: preview.editId } }));
     const after = JSON.parse(await readFile(path, "utf8"));
     assert.equal(after.animations.walk.bones.arm.rotate[1].time, 1);
@@ -572,6 +592,18 @@ test("staged edit renders and compares before/after without changing source", { 
     } }));
     assert.equal(stagedMotion.motionDuration, 1);
     assert.equal(stagedMotion.checkedSource.editId, preview.editId);
+    const revision = parseTextResult(await client.callTool({ name: "spine_preview_edit", arguments: {
+      path, baseEditId: preview.editId,
+      operations: [{ kind: "retime_animation", animation: "walk", scale: 1.5 }],
+    } }));
+    const revisionRender = parseTextResult(await client.callTool({ name: "spine_render_staged_edit", arguments: {
+      editId: revision.editId, settingsPath, outputDir: directory, animation: "walk",
+    } }));
+    assert.equal(revisionRender.afterHash, revision.afterHash);
+    const revisionCheck = parseTextResult(await client.callTool({ name: "spine_check_animation", arguments: {
+      path, animation: "walk", previewId: revisionRender.previewId, editId: revision.editId,
+    } }));
+    assert.equal(revisionCheck.motionDuration, 1.5);
     const comparison = parseTextResult(await client.callTool({ name: "spine_compare_previews", arguments: { editId: preview.editId, settingsPath, outputDir: directory, animation: "walk", samples: 2 } }));
     assert.ok(comparison.beforePreviewId);
     assert.ok(comparison.afterPreviewId);

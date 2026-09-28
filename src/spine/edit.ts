@@ -62,9 +62,12 @@ export type EditSummary = RetimeSummary | BulkSummary | LoopSummary | CurveSumma
 
 interface Stage {
   id: string;
+  baseEditId?: string;
   source: SpineDocument;
   after: SpineDocument;
   operations: EditOperation[];
+  /** Operations supplied for this request, rather than the cumulative chain. */
+  requestOperations?: EditOperation[];
   requestId?: string;
   fingerprint: string;
   createdAt: string;
@@ -77,7 +80,9 @@ interface Stage {
 
 export interface PreviewResult {
   editId: string;
+  baseEditId?: string;
   diffResourceUri: string;
+  netDiffResourceUri: string;
   sourcePath: string;
   sourceHash: string;
   afterHash: string;
@@ -88,6 +93,11 @@ export interface PreviewResult {
   changes: KeyChange[];
   changesTruncated: boolean;
   changeValuesTruncated: boolean;
+  changesOffset: number;
+  netChangeCount: number;
+  netChanges: KeyChange[];
+  netChangesTruncated: boolean;
+  netChangeValuesTruncated: boolean;
   diagnostics: Diagnostic[];
   expiresAt: string;
 }
@@ -117,13 +127,19 @@ function restoredStage(value: unknown, editId: string): Stage {
     || typeof saved.source?.path !== "string" || typeof saved.source?.text !== "string"
     || typeof saved.after?.text !== "string" || !Array.isArray(saved.operations)
     || !Array.isArray(saved.changes) || !Array.isArray(saved.summaries)
-    || !Array.isArray(saved.diagnostics) || !Array.isArray(saved.dependencies)) {
+    || !Array.isArray(saved.diagnostics) || !Array.isArray(saved.dependencies)
+    || (saved.requestOperations !== undefined && !Array.isArray(saved.requestOperations))
+    || (saved.baseEditId !== undefined && typeof saved.baseEditId !== "string")) {
     throw new SpineError("EDIT_STATE_CORRUPT", `Saved stage ${editId} is incomplete.`);
   }
   const source = parseDocument(saved.source.path, saved.source.text);
   const after = parseDocument(saved.source.path, saved.after.text);
   if (source.hash !== saved.source.hash || after.hash !== saved.after.hash || after.path !== saved.after.path
-    || saved.fingerprint !== sha256(JSON.stringify({ sourceHash: source.hash, operations: saved.operations }))) {
+    || saved.fingerprint !== sha256(JSON.stringify({ sourceHash: source.hash,
+      ...(saved.baseEditId ? { baseEditId: saved.baseEditId } : {}), operations: saved.operations,
+      ...(saved.requestOperations ? { requestOperations: saved.requestOperations } : {}) }))
+    || (saved.requestOperations && JSON.stringify(saved.operations.slice(-saved.requestOperations.length))
+      !== JSON.stringify(saved.requestOperations))) {
     throw new SpineError("EDIT_STATE_CORRUPT", `Saved stage ${editId} failed its integrity check.`);
   }
   return { ...saved, source, after };
@@ -147,6 +163,40 @@ function compactChangeValue(value: unknown): { value: unknown; truncated: boolea
     value: { omitted: true, jsonCharacters: encoded.length, ...(record ? { fields: Object.keys(record), time: record.time ?? 0 } : { length: (value as unknown[]).length }) },
     truncated: true,
   };
+}
+
+function netChanges(before: unknown, after: unknown): KeyChange[] {
+  const changes: KeyChange[] = [];
+  const record = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === "object" && !Array.isArray(value);
+  const visit = (left: unknown, right: unknown, path: JsonPath, hasLeft = true, hasRight = true): void => {
+    if (hasLeft && hasRight && Object.is(left, right)) return;
+    if (hasLeft && hasRight && Array.isArray(left) && Array.isArray(right)) {
+      for (let index = 0; index < Math.max(left.length, right.length); index++) {
+        visit(left[index], right[index], [...path, index], index < left.length, index < right.length);
+      }
+      return;
+    }
+    if (hasLeft && hasRight && record(left) && record(right)) {
+      for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+        visit(left[key], right[key], [...path, key], Object.hasOwn(left, key), Object.hasOwn(right, key));
+      }
+      return;
+    }
+    changes.push({ path: timelinePath(path), before: hasLeft ? left : null, after: hasRight ? right : null });
+  };
+  visit(before, after, []);
+  return changes;
+}
+
+function compactChanges(changes: KeyChange[]): { changes: KeyChange[]; valuesTruncated: boolean } {
+  let valuesTruncated = false;
+  return { changes: changes.map((change) => {
+    const before = compactChangeValue(change.before);
+    const after = compactChangeValue(change.after);
+    valuesTruncated ||= before.truncated || after.truncated;
+    return { path: change.path, before: before.value, after: after.value };
+  }), valuesTruncated };
 }
 
 function retimeText(document: SpineDocument, operation: RetimeAnimationOperation): { text: string; changes: TimeChange[]; summary: RetimeSummary } {
@@ -328,24 +378,44 @@ export class EditStore {
     }
   }
 
-  async preview(path: string, operations: EditOperation[], requestId?: string): Promise<PreviewResult> {
+  async preview(path: string, operations: EditOperation[], requestId?: string, baseEditId?: string): Promise<PreviewResult> {
     await this.hydrate();
     this.discardExpired();
     if (operations.length === 0) throw new SpineError("EMPTY_EDIT", "At least one edit operation is required.");
     const source = await readDocument(path);
     requireEditableVersion(source);
     assertValid(source);
-    const fingerprint = sha256(JSON.stringify({ sourceHash: source.hash, operations }));
     const requestKey = requestId ? `${source.path}:${requestId}` : undefined;
-    if (requestKey && this.requests.has(requestKey)) {
-      const prior = this.stages.get(this.requests.get(requestKey)!);
-      if (prior && prior.fingerprint === fingerprint) return this.describe(prior);
+    const priorId = requestKey ? this.requests.get(requestKey) : undefined;
+    const prior = priorId ? this.loadStage(priorId) : undefined;
+    if (prior) {
+      const priorBase = !prior.requestOperations && prior.baseEditId ? this.loadStage(prior.baseEditId) : undefined;
+      const originalOperations = prior.requestOperations ?? (prior.baseEditId
+        ? priorBase && prior.operations.slice(priorBase.operations.length) : prior.operations);
+      const sameOperations = originalOperations !== undefined
+        && JSON.stringify(originalOperations) === JSON.stringify(operations);
+      if (prior.source.hash === source.hash && prior.baseEditId === baseEditId && sameOperations) {
+        return this.describe(prior);
+      }
       throw new SpineError("IDEMPOTENCY_CONFLICT", "The request ID was already used for different edit contents.");
     }
-    let text = source.text;
-    const allChanges: KeyChange[] = [];
-    const summaries: Stage["summaries"] = [];
-    const dependencies: Stage["dependencies"] = [];
+    const base = baseEditId ? this.loadStage(baseEditId) : undefined;
+    if (baseEditId && !base) throw new SpineError("EDIT_NOT_FOUND", "The base staged edit does not exist or has expired.");
+    if (base && base.source.path !== source.path) {
+      throw new SpineError("BASE_EDIT_MISMATCH", "The base staged edit belongs to a different source JSON.",
+        { baseEditId, basePath: base.source.path, sourcePath: source.path });
+    }
+    if (base && base.source.hash !== source.hash) {
+      throw new SpineError("SOURCE_CHANGED", "The source JSON changed after the base edit was staged. Preview again from the current file.",
+        { expectedHash: base.source.hash, actualHash: source.hash });
+    }
+    const allOperations = base ? [...base.operations, ...operations] : operations;
+    const fingerprint = sha256(JSON.stringify({ sourceHash: source.hash,
+      ...(baseEditId ? { baseEditId } : {}), operations: allOperations, requestOperations: operations }));
+    let text = base?.after.text ?? source.text;
+    const allChanges: KeyChange[] = base ? [...base.changes] : [];
+    const summaries: Stage["summaries"] = base ? [...base.summaries] : [];
+    const dependencies: Stage["dependencies"] = base ? [...base.dependencies] : [];
     for (const operation of operations) {
       const current = parseDocument(source.path, text);
       if (operation.kind === "retime_animation") {
@@ -461,7 +531,8 @@ export class EditStore {
     const after = parseDocument(source.path, text);
     const diagnostics = assertValid(after);
     const stage: Stage = {
-      id: randomUUID(), source, after, operations, requestId, fingerprint,
+      id: randomUUID(), baseEditId, source, after, operations: allOperations, requestOperations: operations,
+      requestId, fingerprint,
       createdAt: new Date().toISOString(), changes: allChanges, summaries, diagnostics, dependencies,
     };
     await this.saveStage(stage);
@@ -471,16 +542,15 @@ export class EditStore {
   }
 
   private describe(stage: Stage): PreviewResult {
-    let changeValuesTruncated = false;
-    const changes = stage.changes.slice(0, 100).map((change) => {
-      const before = compactChangeValue(change.before);
-      const after = compactChangeValue(change.after);
-      changeValuesTruncated ||= before.truncated || after.truncated;
-      return { path: change.path, before: before.value, after: after.value };
-    });
+    const changesOffset = Math.max(0, stage.changes.length - 100);
+    const recent = compactChanges(stage.changes.slice(changesOffset));
+    const net = netChanges(stage.source.data, stage.after.data);
+    const netPreview = compactChanges(net.slice(0, 100));
     return {
       editId: stage.id,
+      ...(stage.baseEditId ? { baseEditId: stage.baseEditId } : {}),
       diffResourceUri: `spine-edit://${stage.id}/changes`,
+      netDiffResourceUri: `spine-edit://${stage.id}/net-changes`,
       sourcePath: stage.source.path,
       sourceHash: stage.source.hash,
       afterHash: stage.after.hash,
@@ -488,9 +558,14 @@ export class EditStore {
       operations: stage.operations,
       summaries: stage.summaries,
       changeCount: stage.changes.length,
-      changes,
+      changes: recent.changes,
       changesTruncated: stage.changes.length > 100,
-      changeValuesTruncated,
+      changeValuesTruncated: recent.valuesTruncated,
+      changesOffset,
+      netChangeCount: net.length,
+      netChanges: netPreview.changes,
+      netChangesTruncated: net.length > 100,
+      netChangeValuesTruncated: netPreview.valuesTruncated,
       diagnostics: stage.diagnostics,
       expiresAt: new Date(Date.parse(stage.createdAt) + this.ttlMs).toISOString(),
     };
@@ -503,11 +578,20 @@ export class EditStore {
     return { editId, changes: stage.changes };
   }
 
+  netChanges(editId: string): { editId: string; sourceHash: string; afterHash: string; changes: KeyChange[] } {
+    this.discardExpired();
+    const stage = this.loadStage(editId);
+    if (!stage) throw new SpineError("EDIT_NOT_FOUND", "The staged edit does not exist or has expired.");
+    return { editId, sourceHash: stage.source.hash, afterHash: stage.after.hash,
+      changes: netChanges(stage.source.data, stage.after.data) };
+  }
+
   snapshot(editId: string) {
     this.discardExpired();
     const stage = this.loadStage(editId);
     if (!stage) throw new SpineError("EDIT_NOT_FOUND", "The staged edit does not exist or has expired.");
     return {
+      baseEditId: stage.baseEditId,
       sourcePath: stage.source.path,
       beforeText: stage.source.text,
       afterText: stage.after.text,
@@ -554,7 +638,7 @@ export class EditStore {
     let result: CommitResult = { editId, sourcePath: stage.source.path, sourceHash: stage.source.hash,
       afterHash: stage.after.hash, backupPath, manifestPath, committedAt: new Date().toISOString() };
     const payload = (status: "prepared" | "committed") => ({ ...result, status,
-      version: stage.source.version, operations: stage.operations, dependencies: stage.dependencies,
+      version: stage.source.version, baseEditId: stage.baseEditId, operations: stage.operations, dependencies: stage.dependencies,
       changes: stage.changes, diagnostics: stage.diagnostics });
     const finish = async () => {
       try {
