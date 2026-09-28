@@ -27,7 +27,7 @@ import { buildMotionOperations } from "./spine/motion.js";
 import { createPlayerPreview } from "./spine/player.js";
 import { buildRigFromLandmarks, readRigManifest, validateRigManifest } from "./spine/landmark-rig.js";
 import { saveRigDraft, startRigReview } from "./spine/rig-review.js";
-import { analyzeRigContacts } from "./spine/rig-contact.js";
+import { analyzeRigContacts, suggestGaitContacts } from "./spine/rig-contact.js";
 import { previewRig } from "./spine/rig-preview.js";
 import { roundTripEdit } from "./spine/roundtrip.js";
 import { inspectAnimation, inspectProject, projectEntries, referenceGraph, searchProject } from "./spine/inspect.js";
@@ -328,7 +328,7 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.analyzeMotionQuality,
     {
-      description: "Review one animation with rig-attached plant, touch, or roll contacts on bones or attachment geometry. Manual point and region contacts and legacy contactRegions remain available as visual estimates. Rig contacts use Spine coordinates and preview frame timing.",
+      description: "Review rendered motion with rig-attached plant, touch, or roll contacts. gaitReview estimates foot targets and stance windows from the leg bones; inspect these estimates against the artwork.",
       inputSchema: z.object({ path: z.string().min(1), animation: z.string().min(1),
         loop: z.boolean().optional(), deformThreshold: z.number().finite().positive().optional(),
         checkAssets: z.boolean().optional(), previewId: z.uuid().optional(), editId: z.uuid().optional(),
@@ -362,6 +362,20 @@ export function createServer(): McpServer {
           penetrationThreshold: z.number().finite().nonnegative().optional(),
           rollingRadius: z.number().finite().positive().optional(),
         })).min(1).max(8).optional(),
+        gaitReview: z.object({ leftLeg: z.string().min(1), rightLeg: z.string().min(1),
+          gait: z.enum(["walk", "run"]).optional(),
+          leftFoot: z.object({ kind: z.literal("bonePoint"), bone: z.string().min(1),
+            x: z.number().finite(), y: z.number().finite() }).optional(),
+          rightFoot: z.object({ kind: z.literal("bonePoint"), bone: z.string().min(1),
+            x: z.number().finite(), y: z.number().finite() }).optional(),
+          leftStance: z.object({ fromFrame: z.number().int().nonnegative(),
+            toFrame: z.number().int().nonnegative() }).optional(),
+          rightStance: z.object({ fromFrame: z.number().int().nonnegative(),
+            toFrame: z.number().int().nonnegative() }).optional(),
+          groundY: z.number().finite().optional(),
+          slipThreshold: z.number().finite().nonnegative().optional(),
+          penetrationThreshold: z.number().finite().nonnegative().optional(),
+        }).optional(),
         contactRegions: z.array(z.object({ name: z.string().min(1),
           fromFrame: z.number().int().nonnegative(), toFrame: z.number().int().nonnegative(),
           x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1),
@@ -370,18 +384,21 @@ export function createServer(): McpServer {
         alphaThreshold: z.number().int().min(1).max(255).optional(),
         minimumVisiblePixels: z.number().int().min(1).max(10000).optional() }),
     },
-    async ({ path, animation, previewId, editId, contacts, rigContacts, contactRegions, alphaThreshold, minimumVisiblePixels, ...options }) => runTool(async () => {
+    async ({ path, animation, previewId, editId, contacts, rigContacts, gaitReview, contactRegions, alphaThreshold, minimumVisiblePixels, ...options }) => runTool(async () => {
       if (contacts && contactRegions) {
         throw new SpineError("INVALID_CONTACT", "Use contacts or legacy contactRegions, not both in one request.");
       }
-      if ((contacts || rigContacts || contactRegions) && !previewId) {
+      if (rigContacts && gaitReview) {
+        throw new SpineError("INVALID_CONTACT", "Use rigContacts or gaitReview, not both in one request.");
+      }
+      if ((contacts || rigContacts || gaitReview || contactRegions) && !previewId) {
         throw new SpineError("PREVIEW_REQUIRED", "Contact checks require a rendered previewId.");
       }
       const { document, frames, fps, frameStart, skin } = await previewForCheck(path, animation, previewId, editId);
       const structural = await checkAnimation(document, animation, options);
       if (!previewId) return structural;
       const checkedSource = { path: document.path, sha256: document.hash, ...(editId ? { editId } : {}) };
-      if (!contacts && !rigContacts && !contactRegions) return { ...structural, previewId, checkedSource };
+      if (!contacts && !rigContacts && !gaitReview && !contactRegions) return { ...structural, previewId, checkedSource };
       const contactOutput: Record<string, unknown> = { previewId, frameCount: frames!.length };
       const hints = [...structural.hints];
       const checksPerformed = [...structural.checksPerformed];
@@ -405,17 +422,23 @@ export function createServer(): McpServer {
           minimumVisiblePixels: contact.minimumVisiblePixels,
           regions: contact.contacts.map((entry) => ({ ...entry, basis: "visual-estimate" })) });
       }
-      if (rigContacts) {
+      if (rigContacts || gaitReview) {
         if (fps === undefined || frameStart === undefined) {
           throw new SpineError("PREVIEW_TIMING_UNAVAILABLE", "Rig contacts need a preview rendered with an explicit FPS.");
         }
+        const suggestion = gaitReview ? suggestGaitContacts(document, animation,
+          { fps, frameStart, frameCount: frames!.length, skin }, gaitReview) : undefined;
+        const selectedContacts = rigContacts ?? suggestion!.rigContacts;
         const rig = analyzeRigContacts(document, animation,
-          { fps, frameStart, frameCount: frames!.length, skin }, rigContacts);
-        driftChecked ||= rigContacts.some((entry) => entry.mode !== "touch");
+          { fps, frameStart, frameCount: frames!.length, skin }, selectedContacts);
+        driftChecked ||= selectedContacts.some((entry) => entry.mode !== "touch");
         checksPerformed.push("rig-attached surface contact and rolling motion");
         hints.push(...rig.hints);
         Object.assign(contactOutput, { rigContacts: rig.contacts,
-          rigTiming: { fps: rig.fps, frameStart: rig.frameStart, units: rig.units } });
+          rigTiming: { fps: rig.fps, frameStart: rig.frameStart, units: rig.units },
+          ...(suggestion ? { gaitReview: { groundY: suggestion.groundY,
+            groundBasis: suggestion.groundBasis, targets: suggestion.targets,
+            stanceWindows: suggestion.stanceWindows, reviewNote: suggestion.reviewNote } } : {}) });
       }
       return { ...structural,
         checkedSource,
@@ -963,10 +986,15 @@ export function createServer(): McpServer {
       const stagedDocument = parseDocument(path, edits.snapshot(stage.editId).afterText);
       const loop = ["idle", "breathing", "blink", "walk", "run"].includes(recipe.type);
       const structuralReview = await checkAnimation(stagedDocument, newAnimation, { loop });
-      return { ...stage, motion: generated.summary, structuralReview,
+      return { editId: stage.editId, diffResourceUri: stage.diffResourceUri,
+        netDiffResourceUri: stage.netDiffResourceUri, sourcePath: stage.sourcePath,
+        sourceHash: stage.sourceHash, afterHash: stage.afterHash, version: stage.version,
+        expiresAt: stage.expiresAt, operationCount: stage.operations.length,
+        changeCount: stage.changeCount, netChangeCount: stage.netChangeCount,
+        diagnostics: stage.diagnostics, motion: generated.summary, structuralReview,
         reviewNext: ["Render the staged edit with spine_render_staged_edit.",
           ...(recipe.type === "walk" || recipe.type === "run"
-            ? ["Inspect contact intervals with spine_analyze_motion_quality; foot drift is a review hint, so check the rendered frames."]
+            ? ["Pass motion.gaitReview with the previewId and editId to spine_analyze_motion_quality, then inspect its inferred foot targets and stance windows against the rendered frames."]
             : ["Inspect the rendered frames before committing."])],
       };
     }),
@@ -1063,12 +1091,17 @@ export function createServer(): McpServer {
       const playerId = randomUUID();
       players.set(playerId, result.player.htmlPath);
       if (players.size > 20) players.delete(players.keys().next().value!);
+      const finalAnimation = result.manifest.animation.final;
+      const sampledFrames = result.manifest.rendered.sampledIndices.map((index) => ({
+        index, uri: `spine-preview://${framePreview.previewId}/${index}` }));
       return { runDir: result.runDir, manifestPath: result.manifestPath,
         projectPath: result.manifest.project.path, reexportedJsonPath: result.manifest.reexported.path,
         verified: true, fidelity: result.manifest.reexported.fidelity,
-        animation: result.manifest.animation, frameCount: result.rendered.frames.length,
-        previewId: framePreview.previewId, frames: framePreview.frames,
-        framesTruncated: framePreview.framesTruncated,
+        animation: { name: input.animation, duration: finalAnimation.duration,
+          timelineCount: finalAnimation.timelineCount, keyCount: finalAnimation.keyCount },
+        frameCount: result.rendered.frames.length, previewId: framePreview.previewId,
+        frames: sampledFrames, framesTruncated: sampledFrames.length < result.rendered.frames.length,
+        frameUriTemplate: `spine-preview://${framePreview.previewId}/{index}`,
         sampledIndices: result.manifest.rendered.sampledIndices,
         contactSheetPath: result.sheet.path, contactSheetUri: `spine-preview://${sheetId}/0`,
         htmlPath: result.player.htmlPath, playerUri: `spine-player://${playerId}/html`,

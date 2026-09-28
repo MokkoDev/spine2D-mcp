@@ -793,7 +793,82 @@ test("MCP stages a generated motion clip through its public recipe schema", { ti
     assert.equal(staged.structuralReview.animation, "hit");
     assert.ok(staged.reviewNext.some((step) => step.includes("spine_render_staged_edit")));
     assert.deepEqual(staged.diagnostics, []);
+    assert.equal(staged.operations, undefined);
+    assert.equal(staged.changes, undefined);
+    assert.match(staged.diffResourceUri, /^spine-edit:\/\//);
     assert.equal(await readFile(path, "utf8"), original);
+
+    const gaitPath = join(directory, "gait.json");
+    const gaitRig = structuredClone(fixture);
+    gaitRig.bones.push({ name: "leftLeg", parent: "root", length: 10 },
+      { name: "rightLeg", parent: "root", length: 10 },
+      { name: "leftArm", parent: "root", length: 10 },
+      { name: "rightArm", parent: "root", length: 10 });
+    await writeFile(gaitPath, JSON.stringify(gaitRig));
+    const gait = parseTextResult(await client.callTool({ name: "spine_generate_motion", arguments: {
+      path: gaitPath, newAnimation: "new-walk", recipe: {
+        type: "walk", leftLeg: "leftLeg", rightLeg: "rightLeg",
+        leftArm: "leftArm", rightArm: "rightArm", rootBone: "root", duration: 1,
+      },
+    } }));
+    assert.deepEqual(gait.motion.gaitReview,
+      { gait: "walk", leftLeg: "leftLeg", rightLeg: "rightLeg" });
+    assert.ok(gait.reviewNext.some((step) => step.includes("motion.gaitReview")));
+    assert.ok(gait.operationCount > 20);
+    assert.ok(JSON.stringify(gait).length < 4000);
+    const fullChanges = await client.readResource({ uri: gait.diffResourceUri });
+    assert.ok(JSON.parse(fullChanges.contents[0].text).changes.length > 20);
+  } finally {
+    await client.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("minimal PNG settings render and gait review checks inferred foot plants", { timeout: 20_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine2d-mcp-gait-review-"));
+  const path = join(directory, "gait.json");
+  const settingsPath = join(directory, "preview.export.json");
+  const mockCli = join(directory, "Spine.sh");
+  const rig = { skeleton: { spine: "4.3.13" },
+    bones: [{ name: "root" }, { name: "leftLeg", parent: "root", length: 10 },
+      { name: "leftFoot", parent: "leftLeg", x: 10, length: 5 },
+      { name: "rightLeg", parent: "root", length: 10 },
+      { name: "rightFoot", parent: "rightLeg", x: 10, length: 5 }],
+    slots: [], skins: [{ name: "default", attachments: {} }],
+    animations: { walk: { bones: {
+      leftLeg: { rotate: [{ time: 0, value: 0 }, { time: 0.25, value: 30 },
+        { time: 0.5, value: 0 }, { time: 1, value: 0 }] },
+      rightLeg: { rotate: [{ time: 0, value: 0 }, { time: 0.5, value: 0 },
+        { time: 0.75, value: -30 }, { time: 1, value: 0 }] },
+    } } },
+  };
+  await writeFile(path, JSON.stringify(rig));
+  await writeFile(settingsPath, JSON.stringify({ class: "export-png", animations: ["walk"], fps: 8 }));
+  const png = Buffer.from(solidPng([255, 255, 255, 255]), "base64");
+  await writeFile(mockCli, `#!/usr/bin/env node\nconst fs=require("node:fs");const path=require("node:path");const args=process.argv.slice(2);const out=args[args.indexOf("--output")+1];const settings=JSON.parse(fs.readFileSync(args[args.indexOf("--export")+1],"utf8"));if(settings.skinType!=="current"||settings.skeleton!=="gait"||settings.animation!=="walk")process.exit(2);for(let i=0;i<8;i++)fs.writeFileSync(path.join(out,\`frame-\${String(i).padStart(4,"0")}.png\`),Buffer.from("${png.toString("base64")}","base64"));\n`);
+  await chmod(mockCli, 0o755);
+  const client = await connect({ SPINE_CLI_PATH: directory });
+  try {
+    const preview = parseTextResult(await client.callTool({ name: "spine_render_preview", arguments: {
+      inputPath: path, settingsPath, outputDir: directory, animation: "walk",
+    } }));
+    assert.equal(preview.frameCount, 8);
+    const review = parseTextResult(await client.callTool({ name: "spine_analyze_motion_quality", arguments: {
+      path, animation: "walk", previewId: preview.previewId,
+      gaitReview: { gait: "walk", leftLeg: "leftLeg", rightLeg: "rightLeg", slipThreshold: 0.1 },
+    } }));
+    assert.deepEqual(review.contact.gaitReview.targets.map((target) => target.bone),
+      ["leftFoot", "rightFoot"]);
+    assert.equal(review.contact.rigContacts.length, 2);
+    assert.ok(!review.checksUnavailable.includes("foot sliding"));
+    assert.ok(review.hints.some((hint) => hint.code === "CONTACT_SLIDE"));
+
+    await writeFile(settingsPath, JSON.stringify({ class: "export-png", skinType: "single" }));
+    const invalid = await client.callTool({ name: "spine_render_preview", arguments: {
+      inputPath: path, settingsPath, outputDir: directory, animation: "walk",
+    } });
+    assert.equal(invalid.isError, true);
+    assert.equal(JSON.parse(invalid.content[0].text).code, "INVALID_EXPORT_SETTINGS");
   } finally {
     await client.close();
     await rm(directory, { recursive: true, force: true });

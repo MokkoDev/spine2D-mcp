@@ -85,8 +85,9 @@ export async function finalizeAnimation(input: FinalizeAnimationInput) {
   try {
     const projectDir = join(runDir, "project");
     await mkdir(projectDir);
+    const skeletonName = basename(source.path, extname(source.path));
     const reviewedJsonPath = join(projectDir, basename(source.path));
-    const projectPath = join(projectDir, `${basename(source.path, extname(source.path))}.spine`);
+    const projectPath = join(projectDir, `${skeletonName}.spine`);
     const dataSettingsPath = join(runDir, "data.export.json");
     const previewSettingsPath = join(runDir, "preview.export.json");
     await copyFile(source.path, reviewedJsonPath);
@@ -99,7 +100,7 @@ export async function finalizeAnimation(input: FinalizeAnimationInput) {
     if (assets.referenceCount) await copyImages(configuredImages, sourceImages, reviewedJsonPath, runDir);
 
     step = "import";
-    await importData(reviewedJsonPath, projectPath, basename(source.path, extname(source.path)),
+    await importData(reviewedJsonPath, projectPath, skeletonName,
       input.editorVersion, input.timeoutMs);
     const projectHash = await hashFile(projectPath);
 
@@ -133,8 +134,9 @@ export async function finalizeAnimation(input: FinalizeAnimationInput) {
 
     step = "render";
     const rendered = await renderPreview({ inputPath: projectPath, settingsPath: effectivePreviewSettingsPath,
-      outputDir: runDir, animation: input.animation, skin: input.skin, fps: input.fps,
+      outputDir: runDir, animation: input.animation, skeleton: skeletonName, skin: input.skin, fps: input.fps,
       display: input.display, editorVersion: input.editorVersion, timeoutMs: input.timeoutMs });
+    await writeFile(effectivePreviewSettingsPath, `${JSON.stringify(rendered.effectiveSettings, null, 2)}\n`);
     const review = await analyzePreview(rendered.frames.map((frame) => frame.path));
     const count = Math.min(input.samples ?? 6, rendered.frames.length);
     const sampledIndices = Array.from({ length: count }, (_, index) => Math.round(

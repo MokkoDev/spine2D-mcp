@@ -2,13 +2,49 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { parseDocument } from "../dist/spine/document.js";
-import { analyzeRigContacts } from "../dist/spine/rig-contact.js";
+import { analyzeRigContacts, suggestGaitContacts } from "../dist/spine/rig-contact.js";
 
 const ground = { point: { x: 0, y: 0 }, normal: { x: 0, y: 1 } };
 const timing = { fps: 1, frameStart: 0, frameCount: 2 };
 function document(name, data) {
   return parseDocument(`/tmp/${name}.json`, JSON.stringify(data));
 }
+
+test("gait review infers distal foot tips and stance windows, then checks sliding", () => {
+  const rig = document("gait", { skeleton: { spine: "4.3.13" },
+    bones: [{ name: "root" }, { name: "leftLeg", parent: "root", length: 10 },
+      { name: "leftFoot", parent: "leftLeg", x: 10, length: 5 },
+      { name: "rightLeg", parent: "root", length: 10 },
+      { name: "rightFoot", parent: "rightLeg", x: 10, length: 5 }],
+    slots: [], skins: [{ name: "default", attachments: {} }],
+    animations: { walk: { bones: {
+      leftLeg: { rotate: [{ time: 0, value: 0 }, { time: 0.25, value: 30 },
+        { time: 0.5, value: 0 }, { time: 1, value: 0 }] },
+      rightLeg: { rotate: [{ time: 0, value: 0 }, { time: 0.5, value: 0 },
+        { time: 0.75, value: -30 }, { time: 1, value: 0 }] },
+    } } },
+  });
+  const timing = { fps: 8, frameStart: 0, frameCount: 9 };
+  const suggestion = suggestGaitContacts(rig, "walk", timing,
+    { leftLeg: "leftLeg", rightLeg: "rightLeg", slipThreshold: 0.1 });
+  assert.deepEqual(suggestion.targets.map((target) => [target.bone, target.x]),
+    [["leftFoot", 5], ["rightFoot", 5]]);
+  assert.deepEqual(suggestion.stanceWindows, [
+    { fromFrame: 0, toFrame: 2 }, { fromFrame: 4, toFrame: 6 },
+  ]);
+  assert.equal(suggestion.groundBasis, "estimated from the first sampled foot point in each stance");
+  const review = analyzeRigContacts(rig, "walk", timing, suggestion.rigContacts);
+  assert.ok(review.hints.some((hint) => hint.code === "CONTACT_SLIDE"));
+  const overridden = suggestGaitContacts(rig, "walk", timing, { leftLeg: "leftLeg", rightLeg: "rightLeg",
+    groundY: -2, leftFoot: { kind: "bonePoint", bone: "leftFoot", x: 3, y: 1 },
+    leftStance: { fromFrame: 1, toFrame: 3 } });
+  assert.equal(overridden.groundY, -2);
+  assert.equal(overridden.rigContacts[0].target.x, 3);
+  assert.deepEqual(overridden.stanceWindows[0], { fromFrame: 1, toFrame: 3 });
+  const longPreview = suggestGaitContacts(rig, "walk", { ...timing, frameCount: 300 },
+    { leftLeg: "leftLeg", rightLeg: "rightLeg" });
+  assert.ok(longPreview.stanceWindows.every((window) => window.toFrame - window.fromFrame < 60));
+});
 
 test("quadruped paw follows IK and ignores overlapping attachment artwork", () => {
   const rig = document("quadruped", {

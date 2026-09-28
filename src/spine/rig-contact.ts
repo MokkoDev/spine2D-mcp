@@ -28,6 +28,22 @@ export interface RigPreviewTiming {
   skin?: string;
 }
 
+type BonePointTarget = Extract<RigContact["target"], { kind: "bonePoint" }>;
+type StanceWindow = { fromFrame: number; toFrame: number };
+
+export interface GaitReviewOptions {
+  leftLeg: string;
+  rightLeg: string;
+  gait?: "walk" | "run";
+  leftFoot?: BonePointTarget;
+  rightFoot?: BonePointTarget;
+  leftStance?: StanceWindow;
+  rightStance?: StanceWindow;
+  groundY?: number;
+  slipThreshold?: number;
+  penetrationThreshold?: number;
+}
+
 type Runtime = { version: "4.2" | "4.3"; skeleton: any; state: any; physics: any };
 
 function fakeRegion42(): spine42.TextureRegion {
@@ -340,4 +356,74 @@ export function analyzeRigContacts(document: SpineDocument, animation: string,
   });
   return { frameCount: timing.frameCount, fps: timing.fps, frameStart: timing.frameStart,
     units: "Spine", contacts: results, hints };
+}
+
+function distalBonePoint(document: SpineDocument, leg: string): BonePointTarget {
+  const bones = Array.isArray(document.data.bones) ? document.data.bones : [];
+  const byName = new Map(bones.filter((bone): bone is Record<string, unknown> =>
+    bone !== null && typeof bone === "object" && !Array.isArray(bone) && typeof bone.name === "string")
+    .map((bone) => [bone.name as string, bone]));
+  if (!byName.has(leg)) throw new SpineError("INVALID_GAIT_REVIEW", `Gait leg bone ${leg} was not found.`);
+  let selected = leg;
+  let selectedDepth = 0;
+  for (const [name, bone] of byName) {
+    let parent = bone.parent;
+    let depth = 0;
+    const seen = new Set<string>();
+    while (typeof parent === "string" && !seen.has(parent)) {
+      seen.add(parent);
+      depth += 1;
+      if (parent === leg) {
+        if (depth > selectedDepth) { selected = name; selectedDepth = depth; }
+        break;
+      }
+      parent = byName.get(parent)?.parent;
+    }
+  }
+  const length = byName.get(selected)?.length;
+  return { kind: "bonePoint", bone: selected,
+    x: typeof length === "number" && Number.isFinite(length) ? length : 0, y: 0 };
+}
+
+/** Build editable plant checks from a gait's leg bones and rendered frame timing. */
+export function suggestGaitContacts(document: SpineDocument, animation: string,
+  timing: RigPreviewTiming, options: GaitReviewOptions) {
+  if (timing.frameCount < 4) {
+    throw new SpineError("INVALID_GAIT_REVIEW", "A gait review needs at least four rendered frames.");
+  }
+  if (options.leftLeg === options.rightLeg) {
+    throw new SpineError("INVALID_GAIT_REVIEW", "Left and right gait legs must differ.");
+  }
+  const last = timing.frameCount - 1;
+  const stanceLength = options.gait === "run" ? 0.125 : 0.25;
+  const leftStance = options.leftStance ?? { fromFrame: 0,
+    toFrame: Math.min(59, Math.max(1, Math.round(last * stanceLength))) };
+  const rightStart = Math.round(last * 0.5);
+  const rightStance = options.rightStance ?? { fromFrame: rightStart,
+    toFrame: Math.min(last, rightStart + 59,
+      Math.max(rightStart + 1, Math.round(last * (0.5 + stanceLength)))) };
+  const targets = [options.leftFoot ?? distalBonePoint(document, options.leftLeg),
+    options.rightFoot ?? distalBonePoint(document, options.rightLeg)];
+  const windows = [leftStance, rightStance];
+  const names = ["left-foot-plant", "right-foot-plant"];
+  const probe = analyzeRigContacts(document, animation, timing, targets.map((target, index) => ({
+    name: names[index], mode: "touch", fromFrame: windows[index].fromFrame,
+    toFrame: windows[index].fromFrame, target,
+    surface: { point: { x: 0, y: 0 }, normal: { x: 0, y: 1 } },
+  })));
+  const sampledY = probe.contacts.map((contact) => contact.samples[0]?.y);
+  if (sampledY.some((value) => value === undefined)) {
+    throw new SpineError("INVALID_GAIT_REVIEW", "A gait foot could not be sampled at the start of its stance.");
+  }
+  const groundY = options.groundY ?? Math.min(...sampledY as number[]);
+  const rigContacts: RigContact[] = targets.map((target, index) => ({
+    name: names[index], mode: "plant", ...windows[index], target,
+    surface: { point: { x: 0, y: groundY }, normal: { x: 0, y: 1 } },
+    slipThreshold: options.slipThreshold ?? 2,
+    penetrationThreshold: options.penetrationThreshold ?? 2,
+  }));
+  return { rigContacts, groundY, groundBasis: options.groundY === undefined
+    ? "estimated from the first sampled foot point in each stance" : "provided",
+  targets, stanceWindows: windows,
+  reviewNote: "Bone tips and stance windows are estimates; inspect the artwork and adjust them before judging foot contact." };
 }

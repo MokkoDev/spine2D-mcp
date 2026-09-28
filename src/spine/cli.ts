@@ -409,18 +409,38 @@ export async function renderPreview(input: RenderPreviewInput) {
   // be reused for those inputs.
   const sourceExtension = extname(input.inputPath).toLowerCase();
   const skeleton = sourceExtension === ".json" ? basename(input.inputPath, extname(input.inputPath)) : input.skeleton;
+  const legacySkin = settings.class === "images" && typeof settings.skin === "string"
+    && settings.skin.toLowerCase() !== "current" ? settings.skin : undefined;
+  const selectedSkin = input.skin ?? legacySkin;
+  const skinType = selectedSkin ? "single" : settings.skinType ?? "current";
+  if (!["current", "single", "all"].includes(String(skinType))
+    || skinType === "single" && !selectedSkin && (typeof settings.skin !== "string" || !settings.skin.trim())) {
+    throw new SpineError("INVALID_EXPORT_SETTINGS", "PNG export settings need skinType current, single, or all; single also needs a skin name.");
+  }
+  const skeletonType = skeleton ? "single" : settings.skeletonType ?? "all";
+  if (!["current", "single", "all"].includes(String(skeletonType))
+    || skeletonType === "single" && !skeleton && (typeof settings.skeleton !== "string" || !settings.skeleton.trim())) {
+    throw new SpineError("INVALID_EXPORT_SETTINGS", "PNG export settings need skeletonType current, single, or all; single also needs a skeleton name.");
+  }
   const configured = {
+    skinNone: false,
+    scale: 100,
+    fps: 30,
+    lastFrame: false,
+    rangeStart: -1,
+    rangeEnd: -1,
+    output: "",
     ...settings,
     class: "export-png",
     exportType: "animation",
     animationType: "single",
     animation: input.animation,
+    skeletonType,
+    skinType,
     renderImages: true,
     open: false,
-    ...(skeleton ? { skeletonType: "single", skeleton } : {}),
-    ...(input.skin ? { skinType: "single", skin: input.skin }
-      : settings.class === "images" && typeof settings.skin === "string" && settings.skin.toLowerCase() !== "current"
-        ? { skinType: "single", skin: settings.skin } : {}),
+    ...(skeleton ? { skeleton } : {}),
+    ...(selectedSkin ? { skin: selectedSkin } : {}),
     ...(input.frameStart === undefined ? {} : { rangeStart: input.frameStart }),
     ...(input.frameEnd === undefined ? {} : { rangeEnd: input.frameEnd }),
     ...(input.fps === undefined ? {} : { fps: input.fps }),
@@ -428,6 +448,10 @@ export async function renderPreview(input: RenderPreviewInput) {
       ? settings.class === "images" && typeof settings.bones === "boolean" ? { renderBones: settings.bones } : {}
       : { renderBones: input.renderBones }),
   };
+  if (typeof configured.fps !== "number" || !Number.isFinite(configured.fps) || configured.fps <= 0
+    || typeof configured.scale !== "number" || !Number.isFinite(configured.scale) || configured.scale <= 0) {
+    throw new SpineError("INVALID_EXPORT_SETTINGS", "PNG export settings need positive numeric fps and scale values.");
+  }
   const outputRoot = resolve(input.outputDir);
   await mkdir(outputRoot, { recursive: true });
   const previewDir = await mkdtemp(join(outputRoot, "spine-preview-"));
@@ -448,6 +472,7 @@ export async function renderPreview(input: RenderPreviewInput) {
     const skin = configured.skinType === "single" && typeof configured.skin === "string" ? configured.skin : undefined;
     return {
       inputPath: resolve(input.inputPath), animation: input.animation, previewDir,
+      effectiveSettings: configured,
       frames: images.map((path) => ({ path, name: basename(path) })),
       frameTimes: fps === undefined ? undefined : images.map((_path, index) => (frameStart + index) / fps),
       fps,

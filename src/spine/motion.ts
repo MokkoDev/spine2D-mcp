@@ -167,5 +167,7 @@ export function buildMotionOperations(document: SpineDocument, newAnimation: str
   operations.push(...trackOperations(newAnimation, tracks));
   return { operations, summary: { recipe: recipe.type, newAnimation, duration,
     timelines: tracks.length + (slotKeys ? 1 : 0), keys: tracks.reduce((count, track) => count + track.keys.length, slotKeys),
-    bones: tracks.map((track) => track.bone), reviewHints } };
+    bones: tracks.map((track) => track.bone), reviewHints,
+    ...((recipe.type === "walk" || recipe.type === "run")
+      ? { gaitReview: { gait: recipe.type, leftLeg: recipe.leftLeg, rightLeg: recipe.rightLeg } } : {}) } };
 }

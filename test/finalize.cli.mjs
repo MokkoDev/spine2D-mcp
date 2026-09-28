@@ -44,11 +44,11 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
       packTarget: "single", warnings: true, version: null, all: true,
       output: "", id: -1, input: "", open: false,
     }));
+    // A minimal saved preset with a stale skeleton selection must still render
+    // the new project imported from rig.json.
     await writeFile(previewSettingsPath, JSON.stringify({
-      class: "export-png", exportType: "animation", skeletonType: "single", skeleton: "rig",
-      animationType: "single", animation: "turn", skinType: "current", skinNone: false,
-      renderImages: true, renderBones: false, scale: 100, fps: 4, lastFrame: false,
-      rangeStart: 0, rangeEnd: 2, packAtlas: null, output: "", id: -1, input: "", open: false,
+      class: "export-png", animations: ["turn"], skeletonType: "single",
+      skeleton: "old-rig", fps: 4,
     }));
     await client.connect(transport);
     const response = await client.callTool({ name: "spine_finalize_animation", arguments: {
@@ -62,6 +62,10 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
     assert.ok(result.projectPath.endsWith(".spine"));
     assert.ok(result.frameCount >= 3);
     assert.equal(result.sampledIndices.length, 3);
+    assert.equal(result.animation.name, "turn");
+    assert.equal(result.animation.keyCount, 2);
+    assert.equal(result.frames.length, 3);
+    assert.ok(JSON.stringify(result).length < 6000);
     assert.match(await readFile(result.htmlPath, "utf8"), /new spine\.SpinePlayer/);
     assert.deepEqual((await readFile(result.contactSheetPath)).subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
     const html = await client.readResource({ uri: result.playerUri });
@@ -71,6 +75,10 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
     const manifest = JSON.parse(await readFile(result.manifestPath, "utf8"));
     assert.equal(manifest.status, "complete");
     assert.equal(manifest.assets.atlas.generated, true);
+    const effectivePreview = JSON.parse(await readFile(manifest.settings.effectivePreview.path, "utf8"));
+    assert.equal(effectivePreview.skeleton, "rig");
+    assert.equal(effectivePreview.skinType, "current");
+    assert.equal(effectivePreview.animation, "turn");
     assert.equal(createHash("sha256").update(await readFile(dataPath)).digest("hex"), sourceHash);
   } finally {
     await client.close().catch(() => undefined);
