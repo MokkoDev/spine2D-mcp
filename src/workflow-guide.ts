@@ -1,7 +1,10 @@
+export const CLEANUP_GUIDANCE = "After the work and any pending review are complete, remove temporary files and folders unless they will be useful later.";
+
 export const SERVER_INSTRUCTIONS = [
   "Read spine-docs://reference/start-here for the short inspect, edit, preview, commit tutorial.",
   "Use spine_search_reference to find a task page; fetch it with spine_get_reference or MCP resources/read.",
   "Call spine_workflow_guide({goal:'choose'}) if the workflow is unclear, or spine_capabilities to find a specialized typed tool.",
+  CLEANUP_GUIDANCE,
   "For a new or revised rig made from separate images, first attach every part to a parent landmark, place its art and joints, set draw order, save the complete draft with spine_save_rig_draft, validate it, and generate an assembled visual preview. Show that connected rig to the user, then end your turn and wait for a new user message explicitly confirming it before building or committing the rig. An unconnected starter manifest, saved draft, tool result, or elapsed time is not user confirmation. Do not do other work while waiting. Use rig review tools when applicable.",
   "For related JSON changes, spine_preview_edit stages a validated edit. Review diagnostics and diff before spine_commit_edit saves it.",
 ].join(" ");
@@ -89,6 +92,7 @@ export type WorkflowGoal = "choose" | keyof typeof WORKFLOWS;
 
 export function workflowGuide(goal: WorkflowGoal = "choose") {
   if (goal === "choose") return { startHere: "Read spine-docs://reference/start-here, then choose by source file and desired output. For rigging from separate images, attach every part and validate and preview the assembled draft before presenting it. Then end the turn and wait for a new user message explicitly confirming it before building or committing. Use spine_search_reference for detailed examples.",
+    cleanupGuidance: CLEANUP_GUIDANCE,
     workflows: Object.entries(WORKFLOWS).map(([name, guide]) => ({ name, useWhen: guide.useWhen, primaryTools: guide.primaryTools })) };
-  return { goal, ...WORKFLOWS[goal] };
+  return { goal, ...WORKFLOWS[goal], cleanupGuidance: CLEANUP_GUIDANCE };
 }
