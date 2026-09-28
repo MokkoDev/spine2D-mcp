@@ -65,6 +65,7 @@ for (const version of ["4.2", "4.3"]) test(`MCP round trips a Spine ${version} p
     assert.equal(result.animation.before.duration, 1);
     assert.equal(result.animation.after.duration, 2);
     assert.equal(result.animation.fidelity.reviewNeeded, false);
+    assert.equal(result.animation.fidelity.semantic.differenceCount, 0);
     assert.equal(result.pairs.length, 2);
     assert.equal(result.motionReview.structural.animation, "turn");
     assert.ok(result.motionReview.preview.sampledCount >= 2);

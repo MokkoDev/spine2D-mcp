@@ -791,7 +791,7 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.roundTripEdit,
     {
-      description: "Export one .spine skeleton with nonessential data, stage JSON edits, import a new project, re-export and validate it, then compare rendered before/after frames.",
+      description: "Export one .spine skeleton with nonessential data, stage JSON edits, import a new project, then compare staged and re-exported data and rendered frames.",
       inputSchema: z.object({ projectPath: z.string().min(1), dataSettingsPath: z.string().min(1),
         previewSettingsPath: z.string().min(1), outputDir: z.string().min(1),
         editorVersion: z.enum(["4.2", "4.3"]), animation: z.string().min(1),

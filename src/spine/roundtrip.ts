@@ -8,6 +8,7 @@ import { analyzeFootContacts, type ContactRegion } from "./contact.js";
 import { readDocument } from "./document.js";
 import { EditStore, type EditOperation } from "./edit.js";
 import { SpineError } from "./errors.js";
+import { compareSemanticFidelity } from "./fidelity.js";
 import { inspectAnimation } from "./inspect.js";
 import { analyzePreview, checkAnimation } from "./quality.js";
 import { validateDocument } from "./validate.js";
@@ -159,14 +160,18 @@ export async function roundTripEdit(input: RoundTripInput, edits: EditStore) {
           missing: reexportAssetCheck.missing });
     }
     const beforeAnimation = inspectAnimation(source, input.animation);
-    const stagedAnimation = inspectAnimation(await readDocument(stagedJsonPath), input.afterAnimation ?? input.animation);
+    const stagedDocument = await readDocument(stagedJsonPath);
+    const stagedAnimation = inspectAnimation(stagedDocument, input.afterAnimation ?? input.animation);
     const afterAnimation = inspectAnimation(reexportedDocument, input.afterAnimation ?? input.animation);
+    const semantic = compareSemanticFidelity(stagedDocument, reexportedDocument);
     const fidelity = { durationDelta: Number((afterAnimation.duration - stagedAnimation.duration).toPrecision(8)),
       timelineCountDelta: afterAnimation.timelineCount - stagedAnimation.timelineCount,
       keyCountDelta: afterAnimation.keyCount - stagedAnimation.keyCount,
+      semantic,
       reviewNeeded: Math.abs(afterAnimation.duration - stagedAnimation.duration) > 1e-4
         || afterAnimation.timelineCount !== stagedAnimation.timelineCount
-        || afterAnimation.keyCount !== stagedAnimation.keyCount };
+        || afterAnimation.keyCount !== stagedAnimation.keyCount
+        || semantic.differenceCount > 0 };
 
     step = "render-before";
     const renderOptions = { settingsPath: effectivePreviewSettingsPath, outputDir: runDir,
@@ -224,7 +229,10 @@ export async function roundTripEdit(input: RoundTripInput, edits: EditStore) {
         before: beforeAnimation, staged: stagedAnimation, after: afterAnimation, fidelity },
       motionReview: { structural, preview: previewReview, contacts,
         hints: [...structural.hints, ...previewReview.hints, ...(contacts?.hints ?? []),
-          ...(fidelity.reviewNeeded ? [{ code: "ROUND_TRIP_TIMELINE_CHANGE", severity: "review" as const,
+          ...(semantic.differenceCount > 0 ? [{ code: "ROUND_TRIP_SEMANTIC_CHANGE", severity: "review" as const,
+            path: semantic.differences[0]?.path ?? "/",
+            message: `${semantic.differenceCount} staged JSON value(s) changed during Spine import and re-export; inspect animation.fidelity.semantic.differences.` }] : []),
+          ...(fidelity.reviewNeeded && semantic.differenceCount === 0 ? [{ code: "ROUND_TRIP_TIMELINE_CHANGE", severity: "review" as const,
             path: `/animations/${input.afterAnimation ?? input.animation}`,
             message: "The imported project re-exported a different duration, timeline count, or key count from the staged JSON." }] : [])] },
       visual: { samples: sampled, beforeFrameCount: before.frames.length,
