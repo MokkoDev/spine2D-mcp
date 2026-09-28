@@ -183,7 +183,9 @@ function netChanges(before: unknown, after: unknown): KeyChange[] {
       }
       return;
     }
-    changes.push({ path: timelinePath(path), before: hasLeft ? left : null, after: hasRight ? right : null });
+    changes.push({ path: timelinePath(path), before: hasLeft ? left : null, after: hasRight ? right : null,
+      ...(hasLeft ? {} : { beforeExists: false as const }),
+      ...(hasRight ? {} : { afterExists: false as const }) });
   };
   visit(before, after, []);
   return changes;
@@ -195,7 +197,7 @@ function compactChanges(changes: KeyChange[]): { changes: KeyChange[]; valuesTru
     const before = compactChangeValue(change.before);
     const after = compactChangeValue(change.after);
     valuesTruncated ||= before.truncated || after.truncated;
-    return { path: change.path, before: before.value, after: after.value };
+    return { ...change, before: before.value, after: after.value };
   }), valuesTruncated };
 }
 

@@ -119,6 +119,22 @@ test("net diff shows the original and final key values while preserving every st
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test("net diff distinguishes removing an explicit null from leaving it present", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine2d-net-null-"));
+  const path = join(directory, "rig.json");
+  const store = new EditStore({ stateDir: join(directory, "state") });
+  try {
+    const data = JSON.parse(fixture());
+    data.skeleton.audio = null;
+    await writeFile(path, `${JSON.stringify(data)}\n`);
+    const stage = await store.preview(path, [{ kind: "set_skeleton_metadata", values: { audio: null } }]);
+    const expected = { path: "/skeleton/audio", before: null, after: null, afterExists: false };
+    assert.deepEqual(stage.netChanges, [expected]);
+    assert.deepEqual(store.netChanges(stage.editId).changes, [expected]);
+    assert.equal(Object.hasOwn(JSON.parse(store.snapshot(stage.editId).afterText).skeleton, "audio"), false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("revision response keeps newest steps visible beyond 100 history entries", async () => {
   const directory = await mkdtemp(join(tmpdir(), "spine2d-revision-history-"));
   const path = join(directory, "rig.json");

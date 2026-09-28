@@ -27,6 +27,9 @@ export interface KeyChange {
   path: string;
   before: unknown;
   after: unknown;
+  /** Net diffs set these to false when a JSON member or array item is absent. */
+  beforeExists?: false;
+  afterExists?: false;
 }
 
 export interface BulkSummary {
