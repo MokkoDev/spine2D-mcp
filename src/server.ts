@@ -24,6 +24,9 @@ import { applyPoseOperations, capturePose, type SavedPose } from "./spine/full-p
 import { applyMeshPoseOperations, captureMeshPose, type SavedMeshPose } from "./spine/mesh-pose.js";
 import { buildMotionOperations } from "./spine/motion.js";
 import { createPlayerPreview } from "./spine/player.js";
+import { buildRigFromLandmarks, readRigManifest, validateRigManifest } from "./spine/landmark-rig.js";
+import { startRigReview } from "./spine/rig-review.js";
+import { previewRig } from "./spine/rig-preview.js";
 import { roundTripEdit } from "./spine/roundtrip.js";
 import { inspectAnimation, inspectProject, projectEntries, referenceGraph, searchProject } from "./spine/inspect.js";
 import { captureBonePose, poseApplyOperations, type SavedBonePose } from "./spine/pose.js";
@@ -177,7 +180,7 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.workflowGuide,
     { description: "Start here when a Spine task could use several tools. Choose by source and outcome; get the recommended entry tools and steps.",
-      inputSchema: z.object({ goal: z.enum(["choose", "inspect", "create_project", "round_trip", "new_motion", "edit_json", "reuse_pose", "review_motion", "batch_export"]).optional() }) },
+      inputSchema: z.object({ goal: z.enum(["choose", "inspect", "create_project", "rig_review", "round_trip", "new_motion", "edit_json", "reuse_pose", "review_motion", "batch_export"]).optional() }) },
     async ({ goal }) => runTool(async () => workflowGuide(goal)),
   );
 
@@ -358,6 +361,39 @@ export function createServer(): McpServer {
       const diagnostics = validateDocument(document, checkAssets);
       return { path: document.path, version: document.version, sourceHash: document.hash, valid: !diagnostics.some((item) => item.severity === "error"), diagnostics };
     }),
+  );
+
+  server.registerTool(
+    TOOL_NAMES.startRigReview,
+    { description: "Inventory PNG parts, create a suggested landmark manifest, and open a local two-view rig editor with token-protected saving.",
+      inputSchema: z.object({ imagesDir: z.string().min(1), manifestPath: z.string().min(1).optional(), outputDir: z.string().min(1), editorVersion: z.enum(["4.2", "4.3"]) }) },
+    async (input) => runTool(async () => startRigReview(input)),
+  );
+
+  server.registerTool(
+    TOOL_NAMES.validateRigManifest,
+    { description: "Validate image hashes, landmark coordinates and confirmations, connections, cycles, and draw order; return visual warnings separately.",
+      inputSchema: z.object({ manifestPath: z.string().min(1) }) },
+    async ({ manifestPath }) => runTool(async () => {
+      const checked = await validateRigManifest(await readRigManifest(manifestPath), manifestPath);
+      return { manifestPath: checked.manifestPath, valid: checked.valid, diagnostics: checked.diagnostics,
+        errors: checked.errors, visualWarnings: checked.visualWarnings };
+    }),
+  );
+
+  server.registerTool(
+    TOOL_NAMES.buildRigFromLandmarks,
+    { description: "Compile confirmed PNG landmarks into new Spine JSON and optionally import a native .spine project without overwriting outputs.",
+      inputSchema: z.object({ manifestPath: z.string().min(1), outputDataPath: z.string().min(1),
+        outputProjectPath: z.string().min(1).optional(), editorVersion: z.enum(["4.2", "4.3"]) }) },
+    async (input) => runTool(async () => buildRigFromLandmarks(input)),
+  );
+
+  server.registerTool(
+    TOOL_NAMES.previewRig,
+    { description: "Render setup and ±30° joint bend overlays, then build a version-matched Spine Web Player preview when atlas packing is available.",
+      inputSchema: z.object({ manifestPath: z.string().min(1), outputDir: z.string().min(1) }) },
+    async ({ manifestPath, outputDir }) => runTool(async () => previewRig(manifestPath, outputDir)),
   );
 
   server.registerTool(

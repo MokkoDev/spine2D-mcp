@@ -4,6 +4,7 @@ export const SERVER_INSTRUCTIONS = [
   "For an existing .spine project needing edit, import, and visual verification, use spine_round_trip_edit. For coordinated edits to skeleton JSON, use spine_preview_edit; a named edit tool is simpler for one operation.",
   "All JSON edit tools stage a change. Review its diagnostics and diff, then call spine_commit_edit with the returned editId to save it.",
   "Use spine_render_preview for an existing file, spine_render_staged_edit for one staged result, and spine_compare_previews to compare before and after a staged edit.",
+  "For independently cropped PNG body parts, use spine_start_rig_review and confirm landmarks in the browser before spine_build_rig_from_landmarks.",
 ].join(" ");
 
 const WORKFLOWS = {
@@ -22,6 +23,15 @@ const WORKFLOWS = {
     steps: ["spine_create_skeleton for JSON-only work, or spine_create_project when a new .spine file is required.",
       "spine_preview_edit to stage the rig, attachments, and initial animation together.",
       "spine_commit_edit after reviewing the diff and diagnostics."],
+  },
+  rig_review: {
+    useWhen: "Place joints on separate PNG body parts, assemble a character, and create a native .spine project.",
+    primaryTools: ["spine_start_rig_review", "spine_validate_rig_manifest", "spine_preview_rig", "spine_build_rig_from_landmarks"],
+    needs: ["PNG images directory", "Spine 4.2 or 4.3 version", "output directory", "licensed Spine CLI for a .spine project and atlas"],
+    steps: ["spine_start_rig_review inventories PNGs and opens the local part and assembly editor.",
+      "Confirm every pivot, tip, and connection landmark; set the root, parents, setup rotations, and draw order; save the manifest.",
+      "spine_validate_rig_manifest reports errors and visual warnings; spine_preview_rig writes setup and joint bend snapshots.",
+      "After reviewing joints and seams, spine_build_rig_from_landmarks creates new JSON and optionally a native .spine project."],
   },
   round_trip: {
     useWhen: "Edit an existing .spine project and verify the new project in one call.",

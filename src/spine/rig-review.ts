@@ -1,0 +1,163 @@
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createServer as createHttpServer, type Server } from "node:http";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+
+import { SpineError } from "./errors.js";
+import { buildRigFromLandmarks, imageDirectory, inventoryImages, readImageInfo, readRigManifest, suggestRigManifest, validateRigManifest, type RigManifest } from "./landmark-rig.js";
+
+function scriptJson(value: unknown) { return JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll("\u2028", "\\u2028").replaceAll("\u2029", "\\u2029"); }
+function sha(text: string) { return createHash("sha256").update(text).digest("hex"); }
+const sessions = new Map<string, Server>();
+
+export async function reviewHtml(manifest: RigManifest, manifestPath: string, token: string) {
+  const dir = imageDirectory(manifest, manifestPath);
+  const actual = Object.fromEntries((await Promise.all(manifest.parts.map(async (part) => {
+    const info = await readImageInfo(dir, part.image);
+    return [part.id, { width: info.width, height: info.height, sha256: info.sha256 }] as const;
+  }))));
+  const images = await Promise.all(manifest.parts.map(async (part) => {
+    const bytes = await readFile(resolve(dir, part.image));
+    return [part.id, `data:image/png;base64,${bytes.toString("base64")}`] as const;
+  }));
+  const diagnostics = (await validateRigManifest(manifest, manifestPath)).diagnostics;
+  const initial = scriptJson({ manifest, images: Object.fromEntries(images), actual, diagnostics, token, manifestPath, hash: sha(JSON.stringify(manifest)) });
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Spine rig review</title>
+<style>
+:root{font:14px system-ui,sans-serif;color:#e6e9ed;background:#171b22}*{box-sizing:border-box}body{margin:0}header{padding:14px 20px;border-bottom:1px solid #344052;display:flex;gap:16px;align-items:center;flex-wrap:wrap}h1{font-size:18px;margin:0}button,input,select{font:inherit}button{background:#344b65;border:1px solid #66809b;color:#fff;padding:5px 9px;border-radius:4px;cursor:pointer}button:hover{background:#476788}button:disabled{opacity:.45;cursor:default}label{display:inline-flex;align-items:center;gap:5px}select,input[type=number],input[type=text]{background:#202b38;border:1px solid #536679;color:#fff;padding:4px;max-width:160px}input[type=range]{vertical-align:middle}.layout{display:grid;grid-template-columns:260px minmax(350px,1fr) minmax(350px,1fr);min-height:calc(100vh - 66px)}aside{border-right:1px solid #344052;padding:14px;display:flex;flex-direction:column;gap:12px}.views{grid-column:span 2;display:grid;grid-template-columns:1fr 1fr}.view{padding:12px;min-width:0}.view:first-child{border-right:1px solid #344052}h2{font-size:16px;margin:0 0 8px}.canvas-wrap{overflow:auto;border:1px solid #526074;background:#272c35}canvas{display:block;width:100%;height:auto;touch-action:none;cursor:crosshair}.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:7px}.muted{color:#aeb9c7;font-size:12px}.suggested{color:#ffca75}.confirmed{color:#8ce2ac}.status{min-height:2em;white-space:pre-wrap}.landmarks{max-height:220px;overflow:auto}.landmark{padding:3px 0;display:flex;justify-content:space-between;gap:4px}.landmark button{padding:1px 5px}footer{padding:8px 15px;border-top:1px solid #344052;color:#aeb9c7}@media(max-width:1100px){.layout{display:block}.views{display:block}.view:first-child{border-right:0}.canvas-wrap{max-width:800px}}
+</style></head><body><header><h1>Spine rig review</h1><span id="file"></span><button id="save">Save manifest</button><button id="refresh-images" hidden>Review changed PNGs</button><button id="download">Download manifest</button><button id="build">Build native project</button><span id="save-state" class="muted"></span></header>
+<div class="layout"><aside>
+<div class="stack"><label>Part <select id="part"></select></label><label>Zoom <input id="zoom" type="range" min="0.5" max="5" step="0.1" value="2"><span id="zoom-value">2×</span></label></div>
+<div class="stack"><strong>Landmarks</strong><div id="landmarks" class="landmarks"></div><div class="row"><input id="new-landmark" type="text" placeholder="new landmark name"><button id="add-landmark">Add</button></div><div class="muted">Suggested markers are amber. Click or drag a marker to confirm it. Coordinates use the full PNG canvas.</div></div>
+<div class="stack"><label>Pivot <select id="pivot"></select></label><label>Tip <select id="tip"></select></label><label>Parent part <select id="parent"></select></label><label>Parent landmark <select id="parent-landmark"></select></label><button id="make-root">Make selected part root</button></div>
+<div class="stack"><strong>Assembly</strong><label>Root X <input id="root-x" type="number" step="0.1"></label><label>Root Y <input id="root-y" type="number" step="0.1"></label><label>Setup rotation <input id="rotation" type="range" min="-180" max="180" step="0.1" value="0"><input id="rotation-number" type="number" step="0.1" value="0">°</label><div class="row"><button id="order-back">Move back</button><button id="order-front">Move front</button></div><div id="order-list" class="muted"></div><button id="confirm-order">Confirm draw order</button><button id="pose-test">Test bend ±30°</button></div>
+<div id="status" class="status muted"></div></aside>
+<div class="views"><section class="view"><h2>Part view</h2><div class="canvas-wrap"><canvas id="part-canvas" width="760" height="700"></canvas></div><div id="pointer" class="muted">Pointer: —</div></section><section class="view"><h2>Assembly view</h2><div class="canvas-wrap"><canvas id="assembly-canvas" width="760" height="700"></canvas></div><div class="muted">Drag the selected tip handle to rotate its part and connected children. Green dots are confirmed; amber dots need review. The white line marks the ground.</div></section></div></div>
+<footer>Canvas outlines include transparent padding. Saves persist the manifest; playback pose tests reset and never change landmarks.</footer>
+<script id="rig-data" type="application/json">${initial}</script><script>
+(function(){'use strict';
+const boot=JSON.parse(document.getElementById('rig-data').textContent);let m=boot.manifest;let saved=JSON.stringify(m);let savedHash=boot.hash;let selected=m.root.part;let zoom=2;let drag=null;let pose={};let testing=false;let status=document.getElementById('status');const $=id=>document.getElementById(id);const pc=$('part-canvas'),ac=$('assembly-canvas'),pctx=pc.getContext('2d'),actx=ac.getContext('2d');const imgs={};for(const [id,src] of Object.entries(boot.images)){const im=new Image();im.onload=draw;im.src=src;imgs[id]=im}
+$('file').textContent=boot.manifestPath;const part=()=>m.parts.find(p=>p.id===selected);const byId=id=>m.parts.find(p=>p.id===id);const point=(a,b)=>[a[0]+b[0],a[1]+b[1]];const diff=(a,b)=>[a[0]-b[0],a[1]-b[1]];const rotate=(p,a)=>[p[0]*Math.cos(a)-p[1]*Math.sin(a),p[0]*Math.sin(a)+p[1]*Math.cos(a)];const rad=d=>d*Math.PI/180;const deg=r=>r*180/Math.PI;
+function fillSelect(el,items,value){el.innerHTML='';for(const [v,label] of items){const o=document.createElement('option');o.value=v;o.textContent=label;el.append(o)}el.value=value}
+function sync(){const p=part();fillSelect($('part'),m.parts.map(x=>[x.id,x.id]),selected);const names=Object.keys(p.landmarks);fillSelect($('pivot'),names.map(n=>[n,n]),p.pivot);fillSelect($('tip'),names.map(n=>[n,n]),p.tip);fillSelect($('parent'),[['','— root / unconnected —'],...m.parts.filter(x=>x.id!==p.id).map(x=>[x.id,x.id])],p.parent?.part||'');updateParentLandmarks();$('root-x').value=String(m.root.world[0]);$('root-y').value=String(m.root.world[1]);$('rotation').value=String(p.setupRotationDeg);$('rotation-number').value=String(p.setupRotationDeg);$('zoom').value=String(zoom);$('zoom-value').textContent=zoom.toFixed(1)+'×';$('make-root').disabled=m.root.part===p.id;renderLandmarks();dirty();draw()}
+function updateParentLandmarks(){const p=part(),parent=byId($('parent').value);fillSelect($('parent-landmark'),parent?Object.keys(parent.landmarks).map(n=>[n,n]):[['','—']],p.parent?.landmark||'')}
+function renderLandmarks(){const box=$('landmarks');box.innerHTML='';for(const [name,v] of Object.entries(part().landmarks)){const row=document.createElement('div');row.className='landmark';const label=document.createElement('span');const yes=part().confirmed.includes(name);label.className=yes?'confirmed':'suggested';label.textContent=name+' ('+v[0].toFixed(2)+', '+v[1].toFixed(2)+') '+(yes?'✓':'suggested');const btn=document.createElement('button');btn.textContent='Confirm';btn.disabled=yes;btn.onclick=()=>{part().confirmed.push(name);changed()};row.append(label,btn);box.append(row)}}
+function dirty(){const changed=JSON.stringify(m)!==saved;$('save-state').textContent=changed?'Unsaved changes':'Saved manifest';$('save').disabled=!changed;const stale=m.parts.some(p=>{const a=boot.actual[p.id];return a&&(p.width!==a.width||p.height!==a.height||p.sha256!==a.sha256)});$('refresh-images').hidden=!stale;$('order-list').textContent='Back → front: '+m.drawOrder.join(' → ');$('confirm-order').textContent=m.drawOrderConfirmed?'Draw order confirmed':'Confirm draw order';$('confirm-order').disabled=m.drawOrderConfirmed===true}
+function changed(){renderLandmarks();dirty();draw()}
+function checker(ctx,x,y,w,h,step=14){for(let iy=0;iy<h;iy+=step)for(let ix=0;ix<w;ix+=step){ctx.fillStyle=((ix/step+iy/step)&1)?'#d0d3d6':'#f3f4f6';ctx.fillRect(x+ix,y+iy,Math.min(step,w-ix),Math.min(step,h-iy))}}
+function dot(ctx,x,y,name,yes){ctx.fillStyle=yes?'#18cf81':'#ffad32';ctx.strokeStyle='#10202a';ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.font='14px system-ui';ctx.fillStyle='#fff';ctx.strokeStyle='#18212a';ctx.lineWidth=3;ctx.strokeText(name,x+9,y-8);ctx.fillText(name,x+9,y-8)}
+function partTransform(){const p=part(),s=zoom,x=(pc.width-p.width*s)/2,y=(pc.height-p.height*s)/2;return{x,y,s}}
+function drawPart(){const p=part(),t=partTransform();pctx.fillStyle='#242a33';pctx.fillRect(0,0,pc.width,pc.height);checker(pctx,t.x,t.y,p.width*t.s,p.height*t.s,Math.max(8,Math.round(12*t.s)));const im=imgs[p.id];if(im?.complete)pctx.drawImage(im,t.x,t.y,p.width*t.s,p.height*t.s);pctx.strokeStyle='#fff';pctx.lineWidth=1.5;pctx.strokeRect(t.x,t.y,p.width*t.s,p.height*t.s);pctx.strokeStyle='#00c9ea';pctx.setLineDash([5,3]);const b=imageBounds(im);if(b)pctx.strokeRect(t.x+b[0]*t.s,t.y+b[1]*t.s,(b[2]-b[0])*t.s,(b[3]-b[1])*t.s);pctx.setLineDash([]);for(const [n,v] of Object.entries(p.landmarks))dot(pctx,t.x+v[0]*t.s,t.y+v[1]*t.s,n,p.confirmed.includes(n));const pivot=p.landmarks[p.pivot];if(pivot){const x=t.x+pivot[0]*t.s,y=t.y+pivot[1]*t.s,a=-rad(p.setupRotationDeg);pctx.strokeStyle='#ffdc70';pctx.lineWidth=2;pctx.beginPath();pctx.moveTo(x,y);pctx.lineTo(x+26*Math.cos(a),y+26*Math.sin(a));pctx.stroke()}pctx.fillStyle='#fff';pctx.fillText('White: PNG canvas   Cyan: opaque pixels   Rotation: '+p.setupRotationDeg.toFixed(1)+'°',12,22)}
+const boundsCache={};function imageBounds(im){if(!im?.complete||!im.naturalWidth)return null;if(boundsCache[im.src])return boundsCache[im.src];const c=document.createElement('canvas');c.width=im.naturalWidth;c.height=im.naturalHeight;const x=c.getContext('2d');x.drawImage(im,0,0);const d=x.getImageData(0,0,c.width,c.height).data;let x0=c.width,y0=c.height,x1=-1,y1=-1;for(let y=0;y<c.height;y++)for(let xx=0;xx<c.width;xx++)if(d[(y*c.width+xx)*4+3]>16){x0=Math.min(x0,xx);y0=Math.min(y0,y);x1=Math.max(x1,xx);y1=Math.max(y1,y)}return boundsCache[im.src]=x1<0?null:[x0,y0,x1+1,y1+1]}
+function placements(){const cache={};function one(id,seen=new Set()){if(cache[id])return cache[id];if(seen.has(id))return null;seen.add(id);const p=byId(id);if(!p)return null;const parent=p.parent?one(p.parent.part,new Set(seen)):null;if(p.parent&&!parent)return null;const B=parent?parent.landmarks[p.parent.landmark]:m.root.world;if(!B)return null;const parentPart=parent?byId(parent.id):null;const phi=rad(p.setupRotationDeg+(pose[id]||0)+(parent?parent.imageAngleDeg-parentPart.setupRotationDeg:0));const d=v=>[v[0]-p.width/2,p.height/2-v[1]];const C=diff(B,rotate(d(p.landmarks[p.pivot]),phi));const landmarks={};for(const [n,v] of Object.entries(p.landmarks))landmarks[n]=point(C,rotate(d(v),phi));const T=landmarks[p.tip];return cache[id]={id,pivot:B,tip:T,center:C,imageAngleDeg:deg(phi),boneAngleDeg:deg(Math.atan2(T[1]-B[1],T[0]-B[0])),landmarks}}
+for(const p of m.parts)one(p.id);return cache}
+function worldScreen(p){return[ac.width/2+p[0]*zoom,ac.height-90-p[1]*zoom]}function screenWorld(p){return[(p[0]-ac.width/2)/zoom,(ac.height-90-p[1])/zoom]}
+function drawAssembly(){actx.fillStyle='#252b34';actx.fillRect(0,0,ac.width,ac.height);const all=placements();actx.strokeStyle='#f5f5f5';actx.lineWidth=2;actx.beginPath();actx.moveTo(0,ac.height-90);actx.lineTo(ac.width,ac.height-90);actx.stroke();for(const id of m.drawOrder){const p=byId(id),a=all[id],im=imgs[id];if(!p||!a||!im?.complete)continue;const c=worldScreen(a.center);actx.save();actx.translate(c[0],c[1]);actx.rotate(-rad(a.imageAngleDeg));actx.drawImage(im,-p.width*zoom/2,-p.height*zoom/2,p.width*zoom,p.height*zoom);actx.restore()}
+for(const p of m.parts){const a=all[p.id];if(!a)continue;const b=worldScreen(a.pivot),t=worldScreen(a.tip);actx.strokeStyle=p.id===selected?'#ffdc70':'#80bbff';actx.lineWidth=p.id===selected?3:2;actx.beginPath();actx.moveTo(b[0],b[1]);actx.lineTo(t[0],t[1]);actx.stroke();dot(actx,b[0],b[1],p.id+(p.id===selected?' pivot':''),p.confirmed.includes(p.pivot));if(p.id===selected){dot(actx,t[0],t[1],'rotate',p.confirmed.includes(p.tip));for(const [name,w] of Object.entries(a.landmarks))if(name!==p.pivot&&name!==p.tip){const v=worldScreen(w);dot(actx,v[0],v[1],name,p.confirmed.includes(name))}}}}
+function draw(){if(part()){drawPart();drawAssembly()}}
+function canvasPoint(e,c){const r=c.getBoundingClientRect();return[(e.clientX-r.left)*c.width/r.width,(e.clientY-r.top)*c.height/r.height]}
+pc.addEventListener('pointerdown',e=>{const p=canvasPoint(e,pc),t=partTransform();let best=null,d=14;for(const [n,v] of Object.entries(part().landmarks)){const dist=Math.hypot(p[0]-t.x-v[0]*t.s,p[1]-t.y-v[1]*t.s);if(dist<d){best=n;d=dist}}if(best){drag={kind:'landmark',name:best};pc.setPointerCapture(e.pointerId);if(!part().confirmed.includes(best))part().confirmed.push(best);changed()}});
+pc.addEventListener('pointermove',e=>{const p=canvasPoint(e,pc),t=partTransform(),u=(p[0]-t.x)/t.s,v=(p[1]-t.y)/t.s;$('pointer').textContent='Pointer: ('+u.toFixed(2)+', '+v.toFixed(2)+') px from image top-left';if(drag?.kind==='landmark'){part().landmarks[drag.name]=[Math.max(0,Math.min(part().width,u)),Math.max(0,Math.min(part().height,v))];changed()}});pc.addEventListener('pointerup',()=>drag=null);pc.addEventListener('pointercancel',()=>drag=null);
+ac.addEventListener('pointerdown',e=>{const p=canvasPoint(e,ac),a=placements()[selected];if(!a)return;const tip=worldScreen(a.tip);if(Math.hypot(p[0]-tip[0],p[1]-tip[1])<25){drag={kind:'rotate',base:part().setupRotationDeg,angle:Math.atan2(p[1]-worldScreen(a.pivot)[1],p[0]-worldScreen(a.pivot)[0])};ac.setPointerCapture(e.pointerId)}});ac.addEventListener('pointermove',e=>{if(drag?.kind!=='rotate')return;const p=canvasPoint(e,ac),a=placements()[selected],b=worldScreen(a.pivot);const angle=Math.atan2(p[1]-b[1],p[0]-b[0]);const val=drag.base+deg(angle-drag.angle);part().setupRotationDeg=Math.round(val*10)/10;$('rotation').value=String(part().setupRotationDeg);$('rotation-number').value=String(part().setupRotationDeg);changed()});ac.addEventListener('pointerup',()=>drag=null);ac.addEventListener('pointercancel',()=>drag=null);
+$('part').onchange=e=>{selected=e.target.value;sync()};$('zoom').oninput=e=>{zoom=Number(e.target.value);$('zoom-value').textContent=zoom.toFixed(1)+'×';draw()};$('pivot').onchange=e=>{part().pivot=e.target.value;if(m.root.part===selected)m.root.landmark=part().pivot;changed()};$('tip').onchange=e=>{part().tip=e.target.value;changed()};$('parent').onchange=e=>{const id=e.target.value,pa=byId(id);part().parent=pa?{part:id,landmark:Object.keys(pa.landmarks)[0]}:null;updateParentLandmarks();changed()};$('parent-landmark').onchange=e=>{if(part().parent)part().parent.landmark=e.target.value;changed()};$('make-root').onclick=()=>{const old=byId(m.root.part);if(old&&old.id!==selected)old.parent=null;part().parent=null;m.root.part=selected;m.root.landmark=part().pivot;sync()};function rotation(v){if(!Number.isFinite(v))return;part().setupRotationDeg=v;$('rotation').value=String(v);$('rotation-number').value=String(v);changed()}$('rotation').oninput=e=>rotation(Number(e.target.value));$('rotation-number').onchange=e=>rotation(Number(e.target.value));
+$('root-x').onchange=e=>{const v=Number(e.target.value);if(Number.isFinite(v)){m.root.world[0]=v;changed()}};$('root-y').onchange=e=>{const v=Number(e.target.value);if(Number.isFinite(v)){m.root.world[1]=v;changed()}};
+$('add-landmark').onclick=()=>{const n=$('new-landmark').value.trim();if(!n||Object.hasOwn(part().landmarks,n)){status.textContent='Enter a new unique landmark name.';return}part().landmarks[n]=[part().width/2,part().height/2];$('new-landmark').value='';sync()};function moveOrder(delta){const i=m.drawOrder.indexOf(selected),j=i+delta;if(j<0||j>=m.drawOrder.length)return;[m.drawOrder[i],m.drawOrder[j]]=[m.drawOrder[j],m.drawOrder[i]];m.drawOrderConfirmed=false;changed()}$('order-back').onclick=()=>moveOrder(-1);$('order-front').onclick=()=>moveOrder(1);$('confirm-order').onclick=()=>{m.drawOrderConfirmed=true;changed()};
+$('pose-test').onclick=()=>{if(testing)return;testing=true;const id=selected,start=performance.now();function tick(now){const dt=now-start;if(dt>=1800){delete pose[id];testing=false;draw();return}pose[id]=30*Math.sin(dt/1800*Math.PI*4);draw();requestAnimationFrame(tick)}requestAnimationFrame(tick)};
+$('refresh-images').onclick=async()=>{let count=0;for(const p of m.parts){const a=boot.actual[p.id];if(a&&(p.width!==a.width||p.height!==a.height||p.sha256!==a.sha256)){p.width=a.width;p.height=a.height;p.sha256=a.sha256;p.confirmed=[];count++}}if(count){sync();status.textContent=count+' changed PNGs need landmark review. Reposition and confirm their markers.';await save()}};
+function download(){const blob=new Blob([JSON.stringify(m,null,2)+'\\n'],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=boot.manifestPath.split(/[\\/]/).pop();a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}$('download').onclick=download;
+async function save(){if(location.protocol==='file:'){download();status.textContent='Downloaded manifest. Pass it to spine_build_rig_from_landmarks.';return false}try{const res=await fetch('/manifest?token='+encodeURIComponent(boot.token),{method:'POST',headers:{'Content-Type':'application/json','If-Match':savedHash},body:JSON.stringify(m)}),data=await res.json();if(!res.ok)throw Error(data.message||'Save failed');saved=JSON.stringify(m);savedHash=data.hash;dirty();status.textContent='Saved. '+data.errors.length+' build errors, '+data.visualWarnings.length+' visual warnings.'+(data.htmlUpdateWarning?' Standalone HTML update: '+data.htmlUpdateWarning:'');return true}catch(err){status.textContent=String(err);return false}}$('save').onclick=save;
+$('build').onclick=async()=>{if(location.protocol==='file:'){download();status.textContent='Downloaded manifest. Use spine_build_rig_from_landmarks to build.';return}if(JSON.stringify(m)!==saved&&!(await save()))return;status.textContent='Building…';try{const res=await fetch('/build?token='+encodeURIComponent(boot.token),{method:'POST'}),data=await res.json();if(!res.ok)throw Error(data.message||'Build failed');status.textContent='Built '+data.outputDataPath+(data.outputProjectPath?' and '+data.outputProjectPath:'')}catch(err){status.textContent=String(err)}};
+sync();if(boot.diagnostics.length)status.textContent=boot.diagnostics.slice(0,5).map(d=>d.code+': '+d.message).join('\\n')+(boot.diagnostics.length>5?'\\n… '+(boot.diagnostics.length-5)+' more diagnostics':'');})();
+</script></body></html>`;
+}
+
+export async function startRigReview(input: { imagesDir: string; manifestPath?: string; outputDir: string; editorVersion: "4.2" | "4.3" }) {
+  const imagesDir = resolve(input.imagesDir);
+  const manifestPath = resolve(input.manifestPath ?? join(dirname(imagesDir), "rig-landmarks.json"));
+  const outputDir = resolve(input.outputDir);
+  const images = await inventoryImages(imagesDir);
+  let manifest: RigManifest;
+  if (await stat(manifestPath).catch(() => undefined)) manifest = await readRigManifest(manifestPath);
+  else {
+    manifest = await suggestRigManifest(imagesDir, manifestPath, input.editorVersion);
+    await mkdir(dirname(manifestPath), { recursive: true });
+    try { await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; manifest = await readRigManifest(manifestPath); }
+  }
+  if (manifest.spineVersion !== input.editorVersion) throw new SpineError("VERSION_MISMATCH", "Manifest Spine version and editor version differ.");
+  if (imageDirectory(manifest, manifestPath) !== imagesDir) throw new SpineError("IMAGES_DIR_MISMATCH", "The existing manifest refers to a different images directory.");
+  const token = randomBytes(24).toString("hex");
+  const html = await reviewHtml(manifest, manifestPath, token);
+  await mkdir(outputDir, { recursive: true });
+  const htmlPath = join(outputDir, `rig-review-${randomUUID()}.html`);
+  await writeFile(htmlPath, html, { flag: "wx" });
+  const workspace = dirname(manifestPath);
+  const server = createHttpServer(async (request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const json = (status: number, value: unknown) => { response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }); response.end(JSON.stringify(value)); };
+    if (url.searchParams.get("token") !== token) { json(403, { message: "Invalid review session token." }); return; }
+    if (request.method === "GET" && url.pathname === "/") {
+      try {
+        const current = await readRigManifest(manifestPath);
+        const page = await reviewHtml(current, manifestPath, token);
+        response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }); response.end(page);
+      } catch (error) { json(500, { message: error instanceof Error ? error.message : String(error) }); }
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/manifest") {
+      try {
+        const current = await readRigManifest(manifestPath);
+        const currentHash = sha(JSON.stringify(current));
+        if (request.headers["if-match"] !== currentHash) { json(409, { message: "Manifest changed on disk. Reload before saving." }); return; }
+        let raw = "";
+        for await (const chunk of request) { raw += chunk.toString(); if (raw.length > 4_000_000) throw new SpineError("MANIFEST_TOO_LARGE", "Manifest exceeds 4 MB."); }
+        const next = JSON.parse(raw) as RigManifest;
+        const oldById = new Map(current.parts.map((p) => [p.id, p]));
+        if (!Array.isArray(next.parts) || next.parts.length !== current.parts.length || next.schemaVersion !== 1 || next.spineVersion !== current.spineVersion || next.imagesDir !== current.imagesDir
+          || next.parts.some((p) => { const old = oldById.get(p.id); return !old || p.image !== old.image; })) {
+          throw new SpineError("IMMUTABLE_IMAGE_METADATA", "The editor cannot change part identities or source image paths.");
+        }
+        for (const part of next.parts) {
+          const old = oldById.get(part.id)!;
+          if (part.width === old.width && part.height === old.height && part.sha256 === old.sha256) continue;
+          const actual = await readImageInfo(imageDirectory(current, manifestPath), part.image);
+          if (part.width !== actual.width || part.height !== actual.height || part.sha256 !== actual.sha256 || part.confirmed?.length) {
+            throw new SpineError("IMAGE_REVIEW_REQUIRED", `Changed image ${part.image} needs current dimensions and hash, and all landmarks must be reconfirmed.`);
+          }
+        }
+        const check = await validateRigManifest(next, manifestPath);
+        const temp = join(workspace, `.rig-manifest-${randomUUID()}.json`);
+        try { await writeFile(temp, `${JSON.stringify(next, null, 2)}\n`, { flag: "wx" }); await rename(temp, manifestPath); }
+        finally { await rm(temp, { force: true }); }
+        let htmlUpdateWarning: string | undefined;
+        try {
+          const nextHtml = await reviewHtml(next, manifestPath, token);
+          const tempHtml = join(outputDir, `.rig-review-${randomUUID()}.html`);
+          try { await writeFile(tempHtml, nextHtml, { flag: "wx" }); await rename(tempHtml, htmlPath); }
+          finally { await rm(tempHtml, { force: true }); }
+        } catch (error) { htmlUpdateWarning = error instanceof Error ? error.message : String(error); }
+        json(200, { manifestPath, hash: sha(JSON.stringify(next)), errors: check.errors, visualWarnings: check.visualWarnings,
+          ...(htmlUpdateWarning ? { htmlUpdateWarning } : {}) });
+      } catch (error) { json(400, { message: error instanceof Error ? error.message : String(error) }); }
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/build") {
+      try {
+        const name = basename(manifestPath, ".json");
+        const run = randomUUID();
+        const result = await buildRigFromLandmarks({ manifestPath, outputDataPath: join(outputDir, `${name}-${run}.json`),
+          outputProjectPath: join(outputDir, `${name}-${run}.spine`), editorVersion: input.editorVersion });
+        json(200, result);
+      } catch (error) { json(400, { message: error instanceof Error ? error.message : String(error) }); }
+      return;
+    }
+    json(404, { message: "Unknown route." });
+  });
+  await new Promise<void>((yes, no) => { server.once("error", no); server.listen(0, "127.0.0.1", () => { server.off("error", no); yes(); }); });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new SpineError("REVIEW_SERVER_FAILED", "Could not start review server.");
+  server.unref();
+  sessions.set(token, server);
+  return { url: `http://127.0.0.1:${address.port}/?token=${token}`, manifestPath, htmlPath, imageCount: images.length,
+    diagnostics: (await validateRigManifest(manifest, manifestPath)).diagnostics };
+}

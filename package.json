@@ -16,7 +16,7 @@
     "start": "node dist/index.js",
     "test": "npm run build && node --test test/*.test.mjs",
     "test:examples": "npm run build && node --test test/examples.regression.mjs",
-    "test:cli": "npm run build && node --test --test-concurrency=1 test/cli.integration.mjs test/constraint.cli.mjs test/attachment.cli.mjs test/structure.cli.mjs test/cleanup.cli.mjs test/media.cli.mjs test/cleanup-curves.cli.mjs test/transform.cli.mjs test/profile.cli.mjs test/motion.cli.mjs test/full-pose.cli.mjs test/mesh-pose.cli.mjs test/roundtrip.cli.mjs"
+    "test:cli": "npm run build && node --test --test-concurrency=1 test/cli.integration.mjs test/constraint.cli.mjs test/attachment.cli.mjs test/structure.cli.mjs test/cleanup.cli.mjs test/media.cli.mjs test/cleanup-curves.cli.mjs test/transform.cli.mjs test/profile.cli.mjs test/motion.cli.mjs test/full-pose.cli.mjs test/mesh-pose.cli.mjs test/roundtrip.cli.mjs test/landmark-rig.cli.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.1.0",
