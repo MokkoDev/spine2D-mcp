@@ -380,14 +380,14 @@ export function createServer(): McpServer {
 
   server.registerTool(
     TOOL_NAMES.startRigReview,
-    { description: "Inventory PNG parts, create a suggested landmark manifest, and open a local two-view rig editor with token-protected saving.",
+    { description: "Inventory PNG parts, create a suggested landmark manifest, and open a local two-view rig editor with token-protected saving. After presenting the rig, end your turn and wait for a new user message explicitly confirming it before continuing.",
       inputSchema: z.object({ imagesDir: z.string().min(1), manifestPath: z.string().min(1).optional(), outputDir: z.string().min(1), editorVersion: z.enum(["4.2", "4.3"]) }) },
     async (input) => runTool(async () => startRigReview(input)),
   );
 
   server.registerTool(
     TOOL_NAMES.validateRigManifest,
-    { description: "Validate image hashes, landmark coordinates and confirmations, connections, cycles, and draw order; return visual warnings separately.",
+    { description: "Validate image hashes, landmark coordinates, connections, cycles, and draw order; return visual warnings separately.",
       inputSchema: z.object({ manifestPath: z.string().min(1) }) },
     async ({ manifestPath }) => runTool(async () => {
       const checked = await validateRigManifest(await readRigManifest(manifestPath), manifestPath);
@@ -398,7 +398,7 @@ export function createServer(): McpServer {
 
   server.registerTool(
     TOOL_NAMES.buildRigFromLandmarks,
-    { description: "Compile confirmed PNG landmarks into new Spine JSON and optionally import a native .spine project without overwriting outputs.",
+    { description: "Compile a reviewed PNG landmark rig into new Spine JSON and optionally import a native .spine project without overwriting outputs. Call only after the user explicitly confirms the rig in a new message.",
       inputSchema: z.object({ manifestPath: z.string().min(1), outputDataPath: z.string().min(1),
         outputProjectPath: z.string().min(1).optional(), editorVersion: z.enum(["4.2", "4.3"]) }) },
     async (input) => runTool(async () => buildRigFromLandmarks(input)),

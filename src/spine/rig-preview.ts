@@ -48,7 +48,7 @@ function drawPart(target: PNG, source: PNG, center: Point, angle: number, screen
 export async function previewRig(manifestPath: string, outputDir: string) {
   const path = resolve(manifestPath), manifest = await readRigManifest(path);
   const validation = await validateRigManifest(manifest, path);
-  const blocking = validation.errors.filter((d) => d.code !== "UNCONFIRMED_LANDMARK" && d.code !== "DRAW_ORDER_UNCONFIRMED");
+  const blocking = validation.errors;
   if (blocking.length) throw new SpineError("INVALID_RIG_MANIFEST", "Fix rig manifest geometry and connections before previewing.", { diagnostics: validation.diagnostics });
   const root = resolve(outputDir); await mkdir(root, { recursive: true });
   const previewDir = await mkdtemp(join(root, "rig-preview-"));
@@ -84,8 +84,8 @@ export async function previewRig(manifestPath: string, outputDir: string) {
     }
     for (const part of manifest.parts) {
       const p=placement.get(part.id)!;line(png,screen(p.pivot),screen(p.tip),[28,110,210]);
-      dot(png,screen(p.pivot),part.confirmed.includes(part.pivot)?[13,190,105]:[246,165,49]);
-      dot(png,screen(p.tip),part.confirmed.includes(part.tip)?[13,190,105]:[246,165,49]);
+      dot(png,screen(p.pivot),[246,165,49]);
+      dot(png,screen(p.tip),[246,165,49]);
     }
     const target=join(previewDir,`${String(index).padStart(3,"0")}-${poses[index].name}.png`);
     await writeFile(target,PNG.sync.write(png),{flag:"wx"});snapshots.push({pose:poses[index].name,path:target});
@@ -94,8 +94,7 @@ export async function previewRig(manifestPath: string, outputDir: string) {
   const imageKey = createHash("sha256").update(JSON.stringify({ version: manifest.spineVersion,
     images: [...validation.images.values()].map((i)=>[i.image,i.sha256]).sort() })).digest("hex");
   let runtimePreview: Record<string,unknown>;
-  if (!validation.valid) runtimePreview = { available: false, code: "RIG_REVIEW_INCOMPLETE", message: "Confirm the landmarks and draw order before compiling a Spine runtime preview." };
-  else try {
+  try {
     const compiled = compileRig(manifest,path,outputDataPath);
     await writeFile(outputDataPath,compiled.text,{flag:"wx"});
     let atlasPath = atlasCache.get(imageKey);
@@ -110,6 +109,6 @@ export async function previewRig(manifestPath: string, outputDir: string) {
   } catch(error) {
     runtimePreview={available:false,code:error instanceof SpineError?error.code:"RUNTIME_PREVIEW_FAILED",message:error instanceof Error?error.message:String(error)};
   }
-  return {manifestPath:path,previewDir,...(validation.valid?{outputDataPath}:{}),snapshots,runtimePreview,diagnostics:validation.diagnostics,
+  return {manifestPath:path,previewDir,outputDataPath,snapshots,runtimePreview,diagnostics:validation.diagnostics,
     visualApproval:"pending_user_review"};
 }

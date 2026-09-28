@@ -174,7 +174,7 @@ export const IMPLEMENTED_TOOLS: readonly ToolCapability[] = [
   { name: TOOL_NAMES.generateMotion, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Generate a parameterized idle, breathing, blink, walk, run, recoil, or follow-through clip." },
   { name: TOOL_NAMES.webPlayerPreview, status: "implemented", area: "Visual review", backend: "server", purpose: "Create a standalone Spine Web Player HTML preview with embedded skeleton, atlas, and textures." },
   { name: TOOL_NAMES.startRigReview, status: "implemented", area: "Art and rig", backend: "server", purpose: "Inventory PNGs and open a two-view landmark and assembly editor." },
-  { name: TOOL_NAMES.validateRigManifest, status: "implemented", area: "Art and rig", backend: "json", purpose: "Check confirmed landmark graph, PNG hashes, canvas bounds, and visual warnings." },
+  { name: TOOL_NAMES.validateRigManifest, status: "implemented", area: "Art and rig", backend: "json", purpose: "Check landmark graph, PNG hashes, canvas bounds, and visual warnings." },
   { name: TOOL_NAMES.buildRigFromLandmarks, status: "implemented", area: "Art and rig", backend: "json+cli", purpose: "Compile a confirmed rig to new Spine JSON and optionally import a native project." },
   { name: TOOL_NAMES.previewRig, status: "implemented", area: "Visual review", backend: "json+cli", purpose: "Render setup and bend overlays and, when available, a Spine Web Player preview." },
   { name: TOOL_NAMES.analyzeMotionQuality, status: "implemented", area: "Visual review", backend: "json+cli", purpose: "Combine animation diagnostics with contact-region drift measurements from preview frames." },

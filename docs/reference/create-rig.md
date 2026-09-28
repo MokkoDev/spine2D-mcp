@@ -1,6 +1,6 @@
 # Create a skeleton and rig
 
-Before creating or changing a rig, show the proposed bone hierarchy, joint positions, attachment placement, and draw order. Ask the user to confirm before applying rig changes unless they already confirmed those details. Use the rig review tools when applicable; a rendered preview does not replace confirmation.
+Before creating or changing a rig, show the proposed bone hierarchy, joint positions, attachment placement, and draw order. End your turn and wait for a new user message explicitly confirming the rig before applying changes or doing further work, unless the user already confirmed those details. A saved draft or rendered preview does not replace confirmation.
 
 Create editable JSON without Spine using `spine_create_skeleton`:
 
@@ -26,4 +26,4 @@ Put a PNG at `/path/to/images/hand.png`, then stage setup and a clip with `spine
 
 Read diagnostics and diff, then call `spine_commit_edit`. With a licensed CLI, `spine_import_data` creates a new `.spine` project from the committed JSON. `spine_create_project` can instead create the initial JSON and `.spine` snapshot in one call; later JSON edits still need import into a new project.
 
-For independently cropped PNG body parts, use `spine_start_rig_review` to confirm landmarks in the browser, `spine_validate_rig_manifest`, `spine_preview_rig`, then `spine_build_rig_from_landmarks`. See [FUNCTIONS.md](../../FUNCTIONS.md) for those inputs.
+For independently cropped PNG body parts, use `spine_start_rig_review` to arrange landmarks in the browser. Unconnected parts appear in a separate tray until assigned a parent. Present the resulting rig to the user and end your turn. After the user confirms it in a new message, use `spine_validate_rig_manifest`, `spine_preview_rig`, then `spine_build_rig_from_landmarks`. See [FUNCTIONS.md](../../FUNCTIONS.md) for those inputs.

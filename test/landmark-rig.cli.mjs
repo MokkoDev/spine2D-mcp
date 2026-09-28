@@ -18,9 +18,9 @@ for(const version of ["4.2","4.3"])test(`real Spine ${version} import/export pre
     const manifestPath=join(folder,"rig-landmarks.json"),m=await suggestRigManifest(images,manifestPath,version);
     const body=m.parts.find(p=>p.id==="body"),leg=m.parts.find(p=>p.id==="leg");
     m.root={part:"body",landmark:"pelvis",world:[0,95]};
-    body.pivot="pelvis";body.tip="neck";body.landmarks={pelvis:[29.5,72.5],neck:[33,10],hip:[19,74]};body.confirmed=Object.keys(body.landmarks);body.setupRotationDeg=11;
-    leg.pivot="hip";leg.tip="knee";leg.landmarks={hip:[11.5,19.5],knee:[15,62]};leg.confirmed=Object.keys(leg.landmarks);leg.parent={part:"body",landmark:"hip"};leg.setupRotationDeg=-17;
-    m.drawOrder=["leg","body"];m.drawOrderConfirmed=true;
+    body.pivot="pelvis";body.tip="neck";body.landmarks={pelvis:[29.5,72.5],neck:[33,10],hip:[19,74]};body.setupRotationDeg=11;
+    leg.pivot="hip";leg.tip="knee";leg.landmarks={hip:[11.5,19.5],knee:[15,62]};leg.parent={part:"body",landmark:"hip"};leg.setupRotationDeg=-17;
+    m.drawOrder=["leg","body"];
     await writeFile(manifestPath,JSON.stringify(m,null,2));
     const dataPath=join(folder,"rig.json"),projectPath=join(folder,"rig.spine");
     const built=await buildRigFromLandmarks({manifestPath,outputDataPath:dataPath,outputProjectPath:projectPath,editorVersion:version});

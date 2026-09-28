@@ -14,12 +14,12 @@ export interface RigPart {
   id: string; image: string; width: number; height: number; sha256: string;
   parent: { part: string; landmark: string } | null;
   pivot: string; tip: string; landmarks: Record<string, Point>;
-  confirmed: string[]; setupRotationDeg: number;
+  setupRotationDeg: number;
 }
 export interface RigManifest {
   schemaVersion: 1; spineVersion: "4.2" | "4.3"; imagesDir: string;
   root: { part: string; landmark: string; world: Point };
-  parts: RigPart[]; drawOrder: string[]; drawOrderConfirmed: boolean;
+  parts: RigPart[]; drawOrder: string[];
 }
 export interface RigDiagnostic { code: string; severity: "error" | "warning"; path: string; message: string }
 export interface ImageInfo { image: string; width: number; height: number; sha256: string; opaqueBounds: [number, number, number, number] | null; alpha: Buffer }
@@ -83,12 +83,12 @@ export async function suggestRigManifest(imagesDir: string, manifestPath: string
     const x = (bounds[0] + bounds[2]) / 2;
     return { id, image: image.image, width: image.width, height: image.height, sha256: image.sha256,
       parent: null, pivot: "pivot", tip: "tip", landmarks: { pivot: [x, bounds[1]] as Point, tip: [x, bounds[3]] as Point },
-      confirmed: [], setupRotationDeg: 0 } satisfies RigPart;
+      setupRotationDeg: 0 } satisfies RigPart;
   });
   const rel = relative(dirname(resolve(manifestPath)), resolve(imagesDir)).split(sep).join("/");
   return { schemaVersion: 1, spineVersion: version, imagesDir: rel || ".",
     root: { part: parts[0].id, landmark: "pivot", world: [0, parts[0].height] }, parts,
-    drawOrder: parts.map((p) => p.id), drawOrderConfirmed: false };
+    drawOrder: parts.map((p) => p.id) };
 }
 export async function readRigManifest(path: string): Promise<RigManifest> {
   const full = resolve(path);
@@ -130,7 +130,7 @@ export async function validateRigManifest(manifest: RigManifest, path: string) {
         const image = await readImageInfo(imageDir, part.image);
         images.set(part.id, image);
         if (part.width !== image.width || part.height !== image.height) issue("STALE_IMAGE_DIMENSIONS", at, `${part.image} dimensions changed; review landmarks.`);
-        if (part.sha256 !== image.sha256) issue("STALE_IMAGE_HASH", `${at}/sha256`, `${part.image} changed; review and reconfirm its landmarks.`);
+        if (part.sha256 !== image.sha256) issue("STALE_IMAGE_HASH", `${at}/sha256`, `${part.image} changed; review its landmarks.`);
       } catch (error) { issue(error instanceof SpineError ? error.code : "IMAGE_READ_FAILED", `${at}/image`, String(error instanceof Error ? error.message : error)); }
     }
     if (!obj(part.landmarks) || !Object.keys(part.landmarks).length) issue("MISSING_LANDMARKS", `${at}/landmarks`, "Part needs landmarks.");
@@ -145,8 +145,6 @@ export async function validateRigManifest(manifest: RigManifest, path: string) {
       && Math.hypot(part.landmarks[part.pivot][0] - part.landmarks[part.tip][0], part.landmarks[part.pivot][1] - part.landmarks[part.tip][1]) < 0.5)
       issue("DEGENERATE_BONE", `${at}/tip`, "Pivot and tip must define a nonzero bone.");
     if (typeof part.setupRotationDeg !== "number" || !Number.isFinite(part.setupRotationDeg)) issue("INVALID_ROTATION", `${at}/setupRotationDeg`, "Setup rotation must be finite.");
-    if (!Array.isArray(part.confirmed) || part.confirmed.some((n) => typeof n !== "string" || !Object.hasOwn(part.landmarks ?? {}, n))) issue("INVALID_CONFIRMATIONS", `${at}/confirmed`, "Confirmed names must refer to landmarks.");
-    else for (const name of new Set([part.pivot, part.tip])) if (name && !part.confirmed.includes(name)) issue("UNCONFIRMED_LANDMARK", `${at}/landmarks/${name}`, `${name} is suggested; confirm it before building.`);
   }
   if (!obj(manifest.root) || typeof manifest.root.part !== "string" || !ids.has(manifest.root.part)) issue("INVALID_ROOT", "/root/part", "Root part is missing.");
   else {
@@ -163,7 +161,6 @@ export async function validateRigManifest(manifest: RigManifest, path: string) {
     if (!obj(parent) || typeof parent.part !== "string" || typeof parent.landmark !== "string") { issue("UNRESOLVED_CONNECTION", ptr("parts", i, "parent"), "Connect this part to a parent landmark."); continue; }
     const source = ids.get(parent.part);
     if (!source || !obj(source.landmarks) || !validPoint(source.landmarks[parent.landmark])) issue("UNRESOLVED_CONNECTION", ptr("parts", i, "parent"), "Parent part or landmark is missing.");
-    else if (!Array.isArray(source.confirmed) || !source.confirmed.includes(parent.landmark)) issue("UNCONFIRMED_LANDMARK", ptr("parts", i, "parent"), "Parent connection landmark needs confirmation.");
   }
   for (const part of parts) {
     if (!obj(part) || typeof part.id !== "string") continue;
@@ -176,14 +173,13 @@ export async function validateRigManifest(manifest: RigManifest, path: string) {
   }
   if (!Array.isArray(manifest.drawOrder) || manifest.drawOrder.length !== parts.length || new Set(manifest.drawOrder).size !== parts.length || parts.some((p) => !obj(p) || typeof p.id !== "string" || !manifest.drawOrder.includes(p.id)))
     issue("INVALID_DRAW_ORDER", "/drawOrder", "Draw order must contain every part id exactly once.");
-  if (manifest.drawOrderConfirmed !== true) issue("DRAW_ORDER_UNCONFIRMED", "/drawOrderConfirmed", "Review and confirm the explicit draw order before building.");
   for (const [i, part] of parts.entries()) {
     if (!obj(part) || typeof part.id !== "string") continue;
     const image = images.get(part.id); if (!image || !obj(part.landmarks)) continue;
     const pivot = part.landmarks[part.pivot];
     if (validPoint(pivot) && !nearOpaque(image, pivot)) issue("PIVOT_FAR_FROM_ART", ptr("parts", i, "pivot"), `${part.id} pivot is over transparent padding; visually review the joint.`, "warning");
   }
-  if (!diagnostics.some((d) => d.severity === "error" && d.code !== "UNCONFIRMED_LANDMARK" && d.code !== "DRAW_ORDER_UNCONFIRMED")) {
+  if (!diagnostics.some((d) => d.severity === "error")) {
     for (const [i, part] of parts.entries()) {
       if (!part.parent) continue;
       let worst = 0, worstPose = "setup";
