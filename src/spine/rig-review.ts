@@ -10,6 +10,31 @@ function scriptJson(value: unknown) { return JSON.stringify(value).replaceAll("<
 function sha(text: string) { return createHash("sha256").update(text).digest("hex"); }
 const sessions = new Map<string, Server>();
 
+export async function saveRigDraft(input: { manifestPath: string; sourceHash: string; draft: RigManifest }) {
+  const manifestPath = resolve(input.manifestPath);
+  const current = await readRigManifest(manifestPath);
+  if (sha(JSON.stringify(current)) !== input.sourceHash)
+    throw new SpineError("RIG_DRAFT_CHANGED", "The rig draft changed since it was opened. Reload it before saving an assembled draft.");
+  const draft = input.draft;
+  if (draft.schemaVersion !== current.schemaVersion || draft.spineVersion !== current.spineVersion || draft.imagesDir !== current.imagesDir
+    || draft.parts.length !== current.parts.length || draft.parts.some((part, index) => {
+      const old = current.parts[index];
+      return !old || part.id !== old.id || part.image !== old.image || part.width !== old.width || part.height !== old.height || part.sha256 !== old.sha256;
+    })) throw new SpineError("IMMUTABLE_IMAGE_METADATA", "Assembly edits cannot change source images or part identities.");
+  const checked = await validateRigManifest(draft, manifestPath);
+  if (!checked.valid) throw new SpineError("INVALID_RIG_MANIFEST", "Connect and place every part before saving the assembled draft.", { diagnostics: checked.diagnostics });
+  const temp = join(dirname(manifestPath), `.rig-manifest-${randomUUID()}.json`);
+  try {
+    await writeFile(temp, `${JSON.stringify(draft, null, 2)}\n`, { flag: "wx" });
+    if (sha(JSON.stringify(await readRigManifest(manifestPath))) !== input.sourceHash)
+      throw new SpineError("RIG_DRAFT_CHANGED", "The rig draft changed while it was being saved. Reload it before retrying.");
+    await rename(temp, manifestPath);
+  } finally { await rm(temp, { force: true }); }
+  return { manifestPath, sourceHash: sha(JSON.stringify(draft)), reviewStatus: "ready_for_visual_preview",
+    diagnostics: checked.diagnostics,
+    nextAction: "Call spine_preview_rig and inspect the connected setup and bend snapshots. Present the assembled visual preview and refreshed editor to the user, then stop until they explicitly confirm the rig." };
+}
+
 export async function reviewHtml(manifest: RigManifest, manifestPath: string, token: string) {
   const dir = imageDirectory(manifest, manifestPath);
   const actual = Object.fromEntries((await Promise.all(manifest.parts.map(async (part) => {
@@ -24,14 +49,14 @@ export async function reviewHtml(manifest: RigManifest, manifestPath: string, to
   const initial = scriptJson({ manifest, images: Object.fromEntries(images), actual, diagnostics, token, manifestPath, hash: sha(JSON.stringify(manifest)) });
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Spine rig review</title>
 <style>
-:root{font:14px system-ui,sans-serif;color:#e6e9ed;background:#171b22}*{box-sizing:border-box}body{margin:0}header{padding:14px 20px;border-bottom:1px solid #344052;display:flex;gap:16px;align-items:center;flex-wrap:wrap}h1{font-size:18px;margin:0}button,input,select{font:inherit}button{background:#344b65;border:1px solid #66809b;color:#fff;padding:5px 9px;border-radius:4px;cursor:pointer}button:hover{background:#476788}button:disabled{opacity:.45;cursor:default}label{display:inline-flex;align-items:center;gap:5px}select,input[type=number],input[type=text]{background:#202b38;border:1px solid #536679;color:#fff;padding:4px;max-width:160px}input[type=range]{vertical-align:middle}.layout{display:grid;grid-template-columns:260px minmax(350px,1fr) minmax(350px,1fr);min-height:calc(100vh - 66px)}aside{border-right:1px solid #344052;padding:14px;display:flex;flex-direction:column;gap:12px}.views{grid-column:span 2;display:grid;grid-template-columns:1fr 1fr}.view{padding:12px;min-width:0}.view:first-child{border-right:1px solid #344052}h2{font-size:16px;margin:0}.view-heading{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}.view-heading button{font-size:12px}.canvas-wrap{overflow:auto;border:1px solid #526074;background:#272c35}canvas{display:block;width:100%;height:auto;touch-action:none;cursor:crosshair}.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:7px}.muted{color:#aeb9c7;font-size:12px}.status{min-height:2em;white-space:pre-wrap}.landmarks{max-height:220px;overflow:auto}.landmark{padding:3px 0}footer{padding:8px 15px;border-top:1px solid #344052;color:#aeb9c7}@media(max-width:1100px){.layout{display:block}.views{display:block}.view:first-child{border-right:0}.canvas-wrap{max-width:800px}}
-</style></head><body><header><h1>Spine rig review</h1><span id="file"></span><button id="undo" type="button" title="Ctrl+Z" aria-keyshortcuts="Control+Z">Undo</button><button id="redo" type="button" title="Ctrl+Shift+Z" aria-keyshortcuts="Control+Shift+Z">Redo</button><button id="save" type="button">Save now</button><button id="refresh-images" hidden>Review changed PNGs</button><button id="download">Download manifest</button><button id="build">Build native project</button><span id="save-state" class="muted"></span></header>
+:root{font:14px system-ui,sans-serif;color:#e6e9ed;background:#171b22}*{box-sizing:border-box}body{margin:0}header{padding:14px 20px;border-bottom:1px solid #344052;display:flex;gap:16px;align-items:center;flex-wrap:wrap}h1{font-size:18px;margin:0}button,input,select{font:inherit}button{background:#344b65;border:1px solid #66809b;color:#fff;padding:5px 9px;border-radius:4px;cursor:pointer}button:hover{background:#476788}button:disabled{opacity:.45;cursor:default}label{display:inline-flex;align-items:center;gap:5px}select,input[type=number],input[type=text]{background:#202b38;border:1px solid #536679;color:#fff;padding:4px;max-width:160px}input[type=range]{vertical-align:middle}.layout{display:grid;grid-template-columns:260px minmax(350px,1fr) minmax(350px,1fr);min-height:calc(100vh - 66px)}aside{border-right:1px solid #344052;padding:14px 14px 72px;display:flex;flex-direction:column;gap:12px}.views{grid-column:span 2;display:grid;grid-template-columns:1fr 1fr}.view{padding:12px;min-width:0}.view:first-child{border-right:1px solid #344052}h2{font-size:16px;margin:0}.view-heading{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}.view-heading button{font-size:12px}.canvas-wrap{overflow:auto;border:1px solid #526074;background:#272c35}canvas{display:block;width:100%;height:auto;touch-action:none;cursor:crosshair}.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:7px}.history-actions{position:fixed;left:12px;bottom:12px;z-index:5;display:flex;gap:6px;padding:6px;background:#202b38;border:1px solid #526074;border-radius:6px}.muted{color:#aeb9c7;font-size:12px}.status{min-height:2em;white-space:pre-wrap}.landmarks{max-height:220px;overflow:auto}.landmark{padding:3px 0}footer{padding:8px 15px;border-top:1px solid #344052;color:#aeb9c7}@media(max-width:1100px){.layout{display:block}.views{display:block}.view:first-child{border-right:0}.canvas-wrap{max-width:800px}}
+</style></head><body><header><h1>Spine rig review</h1><span id="file"></span><button id="save" type="button">Save now</button><button id="refresh-images" hidden>Review changed PNGs</button><button id="download">Download manifest</button><button id="build">Build native project</button><span id="save-state" class="muted"></span></header>
 <div class="layout"><aside>
 <div class="stack"><label>Part <select id="part"></select></label><label>Zoom <input id="zoom" type="range" min="0.5" max="5" step="0.1" value="2"><span id="zoom-value">2×</span></label></div>
 <div class="stack"><strong>Landmarks</strong><div id="landmarks" class="landmarks"></div><div class="row"><input id="new-landmark" type="text" placeholder="new landmark name"><button id="add-landmark">Add</button></div><div class="muted">Drag a marker to adjust its position. Coordinates use the full PNG canvas.</div></div>
 <div class="stack"><label>Pivot <select id="pivot"></select></label><label>Tip <select id="tip"></select></label><label>Parent part <select id="parent"></select></label><label>Parent landmark <select id="parent-landmark"></select></label><button id="make-root">Make selected part root</button></div>
 <div class="stack"><strong>Assembly</strong><label>Root X <input id="root-x" type="number" step="0.1"></label><label>Root Y <input id="root-y" type="number" step="0.1"></label><label>Setup rotation <input id="rotation" type="range" min="-180" max="180" step="0.1" value="0"><input id="rotation-number" type="number" step="0.1" value="0">°</label><div class="row"><button id="order-back">Move back</button><button id="order-front">Move front</button></div><div id="order-list" class="muted"></div><button id="pose-test">Test bend ±30°</button></div>
-<div id="status" class="status muted"></div></aside>
+<div id="status" class="status muted"></div><div class="history-actions" role="group" aria-label="Edit history"><button id="undo" type="button" title="Ctrl+Z" aria-keyshortcuts="Control+Z">Undo</button><button id="redo" type="button" title="Ctrl+Shift+Z" aria-keyshortcuts="Control+Shift+Z">Redo</button></div></aside>
 <div class="views"><section class="view"><div class="view-heading"><h2>Part view</h2></div><div class="canvas-wrap"><canvas id="part-canvas" width="760" height="700"></canvas></div><div id="pointer" class="muted">Pointer: —</div></section><section class="view"><div class="view-heading"><h2>Assembly view</h2><button id="toggle-bones" type="button" aria-pressed="true">Hide skeleton</button><button id="toggle-points" type="button" aria-pressed="true">Hide points</button></div><div class="canvas-wrap"><canvas id="assembly-canvas" width="760" height="700"></canvas></div><div class="muted">Drag the selected tip handle to rotate its part and connected children. Click a part in the unconnected tray to select it, then choose its parent landmark. The white line marks the ground.</div></section></div></div>
 <footer>Canvas outlines include transparent padding. Changes save automatically; Undo and Redo affect rig edits. Playback pose tests reset and never change landmarks.</footer>
 <script id="rig-data" type="application/json">${initial}</script><script>
@@ -166,8 +191,12 @@ export async function startRigReview(input: { imagesDir: string; manifestPath?: 
   if (!address || typeof address === "string") throw new SpineError("REVIEW_SERVER_FAILED", "Could not start review server.");
   server.unref();
   sessions.set(token, server);
+  const validation = await validateRigManifest(manifest, manifestPath);
   return { url: `http://127.0.0.1:${address.port}/?token=${token}`, manifestPath, htmlPath, imageCount: images.length,
-    diagnostics: (await validateRigManifest(manifest, manifestPath)).diagnostics,
-    reviewStatus: "awaiting_user_confirmation",
-    nextAction: "Present the editor and proposed rig, then end your turn. Wait for a new user message explicitly confirming the rig before calling more tools or continuing work." };
+    manifest, sourceHash: sha(JSON.stringify(manifest)),
+    diagnostics: validation.diagnostics,
+    reviewStatus: validation.valid ? "ready_for_visual_preview" : "needs_assembly",
+    nextAction: validation.valid
+      ? "Generate and inspect the assembled setup and bend previews. Present the connected rig and editor to the user, then end your turn and wait for a new message explicitly confirming it before building or committing."
+      : "Complete the draft before asking for confirmation: connect every part to a parent landmark, position all art and joints, set draw order, and call spine_save_rig_draft with the returned manifest and sourceHash. Resolve validation errors, then generate and inspect an assembled visual preview. Present the complete rig and wait for explicit user confirmation before building or committing." };
 }

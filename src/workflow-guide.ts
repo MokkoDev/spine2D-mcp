@@ -2,7 +2,7 @@ export const SERVER_INSTRUCTIONS = [
   "Read spine-docs://reference/start-here for the short inspect, edit, preview, commit tutorial.",
   "Use spine_search_reference to find a task page; fetch it with spine_get_reference or MCP resources/read.",
   "Call spine_workflow_guide({goal:'choose'}) if the workflow is unclear, or spine_capabilities to find a specialized typed tool.",
-  "For a new or revised rig, show the proposed bone hierarchy, joint positions, attachment placement, and draw order. Then end your turn and wait for a new user message explicitly confirming the rig before applying rig changes. A saved draft, tool result, or elapsed time is not user confirmation. Do not do other work while waiting. Use rig review tools when applicable.",
+  "For a new or revised rig made from separate images, first attach every part to a parent landmark, place its art and joints, set draw order, save the complete draft with spine_save_rig_draft, validate it, and generate an assembled visual preview. Show that connected rig to the user, then end your turn and wait for a new user message explicitly confirming it before building or committing the rig. An unconnected starter manifest, saved draft, tool result, or elapsed time is not user confirmation. Do not do other work while waiting. Use rig review tools when applicable.",
   "For related JSON changes, spine_preview_edit stages a validated edit. Review diagnostics and diff before spine_commit_edit saves it.",
 ].join(" ");
 
@@ -19,20 +19,20 @@ const WORKFLOWS = {
     useWhen: "Create a new skeleton JSON or a new .spine project from scratch.",
     primaryTools: ["spine_create_skeleton", "spine_create_project"],
     needs: ["new output path", "Spine 4.2 or 4.3 version", "licensed Spine CLI only for a .spine project"],
-    steps: ["For rigging, show the proposed bone hierarchy, joint positions, attachment placement, and draw order. End the turn and wait for explicit user confirmation before applying rig changes or doing further work, unless the user already confirmed those details.",
+    steps: ["For rigging from separate images, assemble every part in a complete draft and show its connected visual preview, bone hierarchy, joints, attachment placement, and draw order. End the turn and wait for explicit user confirmation before building or committing the rig, unless the user already confirmed those details.",
       "spine_create_skeleton for JSON-only work, or spine_create_project when a new .spine file is required.",
       "spine_preview_edit to stage the rig, attachments, and initial animation together.",
       "spine_commit_edit after reviewing the diff and diagnostics."],
   },
   rig_review: {
     useWhen: "Place joints on separate PNG body parts, assemble a character, and create a native .spine project.",
-    primaryTools: ["spine_start_rig_review", "spine_validate_rig_manifest", "spine_preview_rig", "spine_build_rig_from_landmarks"],
+    primaryTools: ["spine_start_rig_review", "spine_save_rig_draft", "spine_validate_rig_manifest", "spine_preview_rig", "spine_build_rig_from_landmarks"],
     needs: ["PNG images directory", "Spine 4.2 or 4.3 version", "output directory", "licensed Spine CLI for a .spine project and atlas"],
-    steps: ["spine_start_rig_review inventories PNGs and opens the local part and assembly editor. Unconnected parts appear in a separate tray until assigned a parent.",
-      "Show the proposed bone hierarchy, joint positions, attachment placement, and draw order. End the turn and wait for a new user message explicitly confirming the rig before any further tool calls or rig changes.",
-      "Review pivot, tip, and connection landmarks; set the root, parents, setup rotations, and draw order. The editor autosaves and supports Undo and Redo. It does not require separate confirmation for each landmark or the draw order.",
-      "spine_validate_rig_manifest reports errors and visual warnings; spine_preview_rig writes setup and joint bend snapshots.",
-      "After reviewing joints and seams, spine_build_rig_from_landmarks creates new JSON and optionally a native .spine project."],
+    steps: ["spine_start_rig_review inventories PNGs and opens the local part and assembly editor. Its starter manifest may have unconnected parts; the user cannot review a finished rig yet.",
+      "Use the manifest and sourceHash from spine_start_rig_review to attach every image part to the appropriate parent landmark. Set pivots, tips, root, setup rotations, and back-to-front draw order; save the complete proposal with spine_save_rig_draft. Reload the editor URL to see the connected character. The editor autosaves and supports Undo and Redo. No separate confirmation is needed for each landmark or the draw order.",
+      "Call spine_validate_rig_manifest and resolve all connection and other build errors. Call spine_preview_rig, then inspect the setup image and joint bend snapshots for placement and seams.",
+      "Show the assembled visual preview, editable review link, bone hierarchy, joints, attachment placement, and draw order. End the turn and wait for a new user message explicitly confirming the complete rig. Do not call more tools or continue work while waiting.",
+      "After confirmation, spine_build_rig_from_landmarks creates new JSON and optionally a native .spine project."],
   },
   round_trip: {
     useWhen: "Edit an existing .spine project and verify the new project in one call.",
@@ -55,7 +55,7 @@ const WORKFLOWS = {
     primaryTools: ["spine_preview_edit", "spine_commit_edit"],
     needs: ["Spine 4.2 or 4.3 skeleton JSON", "one or more edit operations"],
     steps: ["spine_inspect_project and spine_inspect_animation to find targets.",
-      "For rig changes, show the proposed bone hierarchy, joint positions, attachment placement, and draw order. End the turn and wait for explicit user confirmation before applying changes or doing further work, unless the user already confirmed those details.",
+      "For rig changes, stage a complete connected draft and visual preview, then show the bone hierarchy, joints, attachment placement, and draw order. End the turn and wait for explicit user confirmation before committing changes, unless the user already confirmed those details.",
       "Use a named spine edit tool for one operation, or spine_preview_edit to stage up to 20 related operations together.",
       "spine_compare_previews when PNG export settings and a licensed Spine CLI are available.",
       "spine_commit_edit to save the selected stage."],
@@ -88,7 +88,7 @@ const WORKFLOWS = {
 export type WorkflowGoal = "choose" | keyof typeof WORKFLOWS;
 
 export function workflowGuide(goal: WorkflowGoal = "choose") {
-  if (goal === "choose") return { startHere: "Read spine-docs://reference/start-here, then choose by source file and desired output. For rigging, present the proposed rig, end the turn, and wait for a new user message explicitly confirming it before doing further work. Use spine_search_reference for detailed examples.",
+  if (goal === "choose") return { startHere: "Read spine-docs://reference/start-here, then choose by source file and desired output. For rigging from separate images, attach every part and validate and preview the assembled draft before presenting it. Then end the turn and wait for a new user message explicitly confirming it before building or committing. Use spine_search_reference for detailed examples.",
     workflows: Object.entries(WORKFLOWS).map(([name, guide]) => ({ name, useWhen: guide.useWhen, primaryTools: guide.primaryTools })) };
   return { goal, ...WORKFLOWS[goal] };
 }

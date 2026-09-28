@@ -25,7 +25,7 @@ import { applyMeshPoseOperations, captureMeshPose, type SavedMeshPose } from "./
 import { buildMotionOperations } from "./spine/motion.js";
 import { createPlayerPreview } from "./spine/player.js";
 import { buildRigFromLandmarks, readRigManifest, validateRigManifest } from "./spine/landmark-rig.js";
-import { startRigReview } from "./spine/rig-review.js";
+import { saveRigDraft, startRigReview } from "./spine/rig-review.js";
 import { previewRig } from "./spine/rig-preview.js";
 import { roundTripEdit } from "./spine/roundtrip.js";
 import { inspectAnimation, inspectProject, projectEntries, referenceGraph, searchProject } from "./spine/inspect.js";
@@ -380,9 +380,23 @@ export function createServer(): McpServer {
 
   server.registerTool(
     TOOL_NAMES.startRigReview,
-    { description: "Inventory PNG parts, create a suggested landmark manifest, and open a local two-view rig editor with token-protected saving. After presenting the rig, end your turn and wait for a new user message explicitly confirming it before continuing.",
+    { description: "Inventory PNG parts, return a starter manifest and sourceHash, and open a local two-view rig editor. Connect and place every part with spine_save_rig_draft, validate, and inspect an assembled preview before asking for user confirmation. Build only after that confirmation.",
       inputSchema: z.object({ imagesDir: z.string().min(1), manifestPath: z.string().min(1).optional(), outputDir: z.string().min(1), editorVersion: z.enum(["4.2", "4.3"]) }) },
     async (input) => runTool(async () => startRigReview(input)),
+  );
+
+  const rigPoint = z.tuple([z.number().finite(), z.number().finite()]);
+  server.registerTool(
+    TOOL_NAMES.saveRigDraft,
+    { description: "Save the entire connected PNG assembly draft before asking the user to confirm it. Provide the manifest and sourceHash returned by spine_start_rig_review, with all parent landmarks, joint positions, and draw order set. Invalid or stale drafts are rejected.",
+      inputSchema: z.object({ manifestPath: z.string().min(1), sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+        draft: z.object({ schemaVersion: z.literal(1), spineVersion: z.enum(["4.2", "4.3"]), imagesDir: z.string(),
+          root: z.object({ part: z.string(), landmark: z.string(), world: rigPoint }),
+          parts: z.array(z.object({ id: z.string(), image: z.string(), width: z.number(), height: z.number(), sha256: z.string(),
+            parent: z.object({ part: z.string(), landmark: z.string() }).nullable(), pivot: z.string(), tip: z.string(),
+            landmarks: z.record(z.string(), rigPoint), setupRotationDeg: z.number().finite() })),
+          drawOrder: z.array(z.string()) }) }) },
+    async (input) => runTool(async () => saveRigDraft(input)),
   );
 
   server.registerTool(
