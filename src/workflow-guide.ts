@@ -82,7 +82,7 @@ const WORKFLOWS = {
     primaryTools: ["spine_save_pose", "spine_apply_pose"],
     needs: ["source skeleton JSON and animation", "sample time", "target skeleton JSON and animation"],
     steps: ["spine_save_pose and spine_apply_pose for bone transforms plus slot attachments.",
-      "Use spine_save_bone_pose and spine_apply_bone_pose for bone channels only, or the mesh pose pair for deform timelines.",
+      "Use the bone, mesh, or constraint pose pairs for those specific channels; spine_capture_constraint_pose and spine_apply_constraint_pose map constraint names by type.",
       "Review the staged diff, then spine_commit_edit."],
   },
   review_motion: {

@@ -968,6 +968,33 @@ test("MCP saves a mesh pose resource and stages its deform key", { timeout: 20_0
   }
 });
 
+test("MCP captures a constraint pose resource and stages compatible key edits", { timeout: 20_000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine2d-mcp-constraint-pose-"));
+  const path = join(directory, "rig.json");
+  const data = structuredClone(fixture);
+  data.constraints = [{ type: "ik", name: "aim", bones: ["arm"], target: "root", mix: 0.4 }];
+  data.animations.walk.ik = { aim: [{ time: 0, mix: 0.2 }, { time: 1, mix: 0.8 }] };
+  await writeFile(path, JSON.stringify(data));
+  const client = await connect();
+  try {
+    const saved = parseTextResult(await client.callTool({ name: "spine_capture_constraint_pose", arguments: {
+      path, animation: "walk", time: 0.5, name: "aim-pose", constraints: { ik: ["aim"] },
+    } }));
+    assert.equal(saved.channelCount, 1);
+    const resource = await client.readResource({ uri: saved.poseResourceUri });
+    assert.equal(JSON.parse(resource.contents[0].text).entries[0].values.mix, 0.5);
+    const staged = parseTextResult(await client.callTool({ name: "spine_apply_constraint_pose", arguments: {
+      poseId: saved.poseId, path, animation: "posed", time: 0.25,
+    } }));
+    assert.equal(staged.pose.compatibility.compatible, true);
+    assert.deepEqual(staged.diagnostics, []);
+    assert.equal(JSON.parse(await readFile(path, "utf8")).animations.posed, undefined);
+  } finally {
+    await client.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("MCP restarts can read and commit a durable staged edit", { timeout: 20_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "spine2d-mcp-stage-restart-"));
   const path = join(directory, "rig.json");

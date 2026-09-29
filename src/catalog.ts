@@ -1,5 +1,5 @@
 export const SERVER_NAME = "spine2d-mcp";
-export const SERVER_VERSION = "0.31.1";
+export const SERVER_VERSION = "0.32.0";
 
 export type ToolStatus = "implemented" | "planned";
 export type ToolBackend = "server" | "json" | "cli" | "json+cli";
@@ -50,6 +50,8 @@ export const TOOL_NAMES = {
   applyPose: "spine_apply_pose",
   saveMeshPose: "spine_save_mesh_pose",
   applyMeshPose: "spine_apply_mesh_pose",
+  captureConstraintPose: "spine_capture_constraint_pose",
+  applyConstraintPose: "spine_apply_constraint_pose",
   bulkKeys: "spine_bulk_keys",
   makeLoop: "spine_make_loop",
   setCurve: "spine_set_curve",
@@ -144,6 +146,8 @@ export const IMPLEMENTED_TOOLS: readonly ToolCapability[] = [
   { name: TOOL_NAMES.applyPose, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Stage a saved pose with bone blending, mirroring, offsets, and compatible slot mapping." },
   { name: TOOL_NAMES.saveMeshPose, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Sample deform timelines into a reusable mesh pose with geometry fingerprints." },
   { name: TOOL_NAMES.applyMeshPose, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Stage a compatible mesh pose with mapping and numeric blending." },
+  { name: TOOL_NAMES.captureConstraintPose, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Sample IK, transform, path, and physics constraint pose channels." },
+  { name: TOOL_NAMES.applyConstraintPose, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Stage mapped constraint pose channels with compatibility checks and numeric blending." },
   { name: TOOL_NAMES.bulkKeys, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Stage bulk key movement, scaling, duplication, deletion, numeric offsets, or quantization." },
   { name: TOOL_NAMES.makeLoop, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Close loop end poses and ease supported scalar seams." },
   { name: TOOL_NAMES.setCurve, status: "implemented", area: "Animation workflow", backend: "json", purpose: "Set linear, stepped, named ease-in/out presets, or Bézier easing on an existing bone transform key." },
@@ -191,9 +195,7 @@ export const IMPLEMENTED_TOOLS: readonly ToolCapability[] = [
   { name: TOOL_NAMES.contactSheet, status: "implemented", area: "Visual review", backend: "server", purpose: "Create a sampled contact sheet from an existing preview sequence." },
 ];
 
-export const PLANNED_TOOLS: readonly ToolCapability[] = [
-  { name: "spine_capture_constraint_pose", status: "planned", area: "Animation workflow", backend: "json", purpose: "Capture and transfer sampled constraint channels across compatible skeletons." },
-];
+export const PLANNED_TOOLS: readonly ToolCapability[] = [];
 
 export const TOOL_CATALOG: readonly ToolCapability[] = [
   ...IMPLEMENTED_TOOLS,

@@ -22,6 +22,7 @@ import { EditStore } from "./spine/edit.js";
 import { SpineError } from "./spine/errors.js";
 import { finalizeAnimation } from "./spine/finalize.js";
 import { applyPoseOperations, capturePose, type SavedPose } from "./spine/full-pose.js";
+import { applyConstraintPoseOperations, captureConstraintPose, type SavedConstraintPose } from "./spine/constraint-pose.js";
 import { applyMeshPoseOperations, captureMeshPose, type SavedMeshPose } from "./spine/mesh-pose.js";
 import { buildMotionOperations } from "./spine/motion.js";
 import { createPlayerPreview } from "./spine/player.js";
@@ -94,6 +95,7 @@ export function createServer(): McpServer {
   const poses = new Map<string, SavedBonePose>();
   const fullPoses = new Map<string, SavedPose>();
   const meshPoses = new Map<string, SavedMeshPose>();
+  const constraintPoses = new Map<string, SavedConstraintPose>();
   const players = new Map<string, string>();
   const reviews = new Map<string, Record<string, unknown>>();
   const rigReviews = new Map<string, { manifestPath: string; fingerprint: string; imageKey: string; editorToken?: string }>();
@@ -1370,6 +1372,60 @@ export function createServer(): McpServer {
     }),
   );
 
+  const constraintSelectionSchema = z.object({
+    ik: z.array(z.string().min(1)).min(1).max(256).optional(),
+    transform: z.array(z.string().min(1)).min(1).max(256).optional(),
+    path: z.array(z.string().min(1)).min(1).max(256).optional(),
+    physics: z.array(z.string().min(1)).min(1).max(256).optional(),
+  });
+
+  server.registerTool(
+    TOOL_NAMES.captureConstraintPose,
+    {
+      description: "Save sampled IK, transform, path, and numeric physics constraint values as a session pose. Physics reset triggers are skipped.",
+      inputSchema: z.object({ path: z.string().min(1), animation: z.string().min(1),
+        time: z.number().finite().nonnegative(), name: z.string().min(1),
+        constraints: constraintSelectionSchema.optional() }),
+    },
+    async ({ path, animation, time, name, constraints }) => runTool(async () => {
+      const pose = captureConstraintPose(await readDocument(path), animation, time, name, constraints);
+      const poseId = randomUUID();
+      constraintPoses.set(poseId, pose);
+      if (constraintPoses.size > 20) constraintPoses.delete(constraintPoses.keys().next().value!);
+      const captured = [...new Set(pose.entries.map((entry) => `${entry.type}/${entry.constraint}`))];
+      return { poseId, poseResourceUri: `spine-constraint-pose://${poseId}/data`, name: pose.name,
+        sourcePath: pose.sourcePath, sourceHash: pose.sourceHash, sourceVersion: pose.sourceVersion,
+        animation: pose.animation, time: pose.time, channelCount: pose.entries.length,
+        constraintCount: captured.length, constraints: captured.slice(0, 50),
+        constraintsTruncated: captured.length > 50,
+        skippedTimelines: pose.skippedTimelines.slice(0, 50), skippedTruncated: pose.skippedTimelines.length > 50 };
+    }),
+  );
+
+  server.registerTool(
+    TOOL_NAMES.applyConstraintPose,
+    {
+      description: "Stage a saved constraint pose on matching Spine 4.2/4.3 constraints. Map renamed constraints; setup shape and path modes must match.",
+      inputSchema: z.object({ poseId: z.uuid(), path: z.string().min(1), animation: z.string().min(1),
+        time: z.number().finite().nonnegative(), blend: z.number().finite().gt(0).max(1).optional(),
+        maps: z.object({ ik: z.record(z.string(), z.string().min(1)).optional(),
+          transform: z.record(z.string(), z.string().min(1)).optional(),
+          path: z.record(z.string(), z.string().min(1)).optional(),
+          physics: z.record(z.string(), z.string().min(1)).optional() }).optional(),
+        curvePolicy: z.enum(["reject", "linearize"]).optional(),
+        requestId: z.string().min(1).max(128).optional() }),
+    },
+    async ({ poseId, path, animation, time, blend, maps, curvePolicy, requestId }) => runTool(async () => {
+      const pose = constraintPoses.get(poseId);
+      if (!pose) throw new SpineError("POSE_NOT_FOUND", `Constraint pose ${poseId} is unavailable in this server session.`);
+      const document = await readDocument(path);
+      const prepared = applyConstraintPoseOperations(document, pose, animation, time, { blend, maps, curvePolicy });
+      const stage = await edits.preview(path, prepared.operations, requestId);
+      if (stage.sourceHash !== document.hash) throw new SpineError("SOURCE_CHANGED", "The target rig changed while the constraint pose was being staged.");
+      return { poseId, pose: prepared.summary, ...stage };
+    }),
+  );
+
   server.registerTool(
     TOOL_NAMES.saveMeshPose,
     {
@@ -2016,6 +2072,17 @@ export function createServer(): McpServer {
     async (uri, { poseId }) => {
       const pose = fullPoses.get(String(poseId));
       if (!pose) throw new SpineError("POSE_NOT_FOUND", "The pose does not exist in this server session.");
+      return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(pose) }] };
+    },
+  );
+
+  server.registerResource(
+    "saved-constraint-pose",
+    new ResourceTemplate("spine-constraint-pose://{poseId}/data", { list: undefined }),
+    { title: "Saved Spine constraint pose", mimeType: "application/json" },
+    async (uri, { poseId }) => {
+      const pose = constraintPoses.get(String(poseId));
+      if (!pose) throw new SpineError("POSE_NOT_FOUND", "The constraint pose does not exist in this server session.");
       return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(pose) }] };
     },
   );

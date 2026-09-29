@@ -375,7 +375,9 @@ export function validateDocument(document: SpineDocument, checkAssets = false): 
         if (timeline.section === "slots" && !slotNames.has(timeline.target)) {
           add("MISSING_SLOT", base, `Animation slot ${timeline.target} does not exist.`);
         }
-        if (["ik", "transform", "path", "physics", "slider"].includes(timeline.section) && !constraintNames.get(timeline.section)?.has(timeline.target)) {
+        if (["ik", "transform", "path", "physics", "slider"].includes(timeline.section)
+          && !(timeline.section === "physics" && timeline.target === "")
+          && !constraintNames.get(timeline.section)?.has(timeline.target)) {
           add("MISSING_CONSTRAINT", base, `Animation constraint ${timeline.target} does not exist.`);
         }
         if (timeline.section === "attachments" || timeline.section === "deform") {
