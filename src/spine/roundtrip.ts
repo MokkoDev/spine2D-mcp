@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { cp, copyFile, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { cp, copyFile, lstat, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { inspectAssets } from "./assets.js";
@@ -11,11 +12,13 @@ import { SpineError } from "./errors.js";
 import { compareSemanticFidelity } from "./fidelity.js";
 import { inspectAnimation } from "./inspect.js";
 import { analyzePreview, checkAnimation } from "./quality.js";
+import { rigDiff } from "./rig-approval.js";
 import { validateDocument } from "./validate.js";
 import { createVisualComparison } from "./visual.js";
 
 export interface RoundTripInput {
   projectPath: string;
+  outputProjectPath?: string;
   dataSettingsPath: string;
   previewSettingsPath: string;
   outputDir: string;
@@ -83,6 +86,17 @@ export async function roundTripEdit(input: RoundTripInput, edits: EditStore) {
   if (!input.operations.length || input.operations.length > 20) {
     throw new SpineError("INVALID_ROUND_TRIP", "The round trip requires 1–20 edit operations.");
   }
+  const outputProjectPath = input.outputProjectPath && resolve(input.outputProjectPath);
+  if (outputProjectPath) {
+    if (extname(outputProjectPath).toLowerCase() !== ".spine" || dirname(outputProjectPath) !== dirname(projectPath)
+      || outputProjectPath === projectPath) {
+      throw new SpineError("INVALID_OUTPUT_PATH", "The output project must be a new .spine sibling of the source project.");
+    }
+    if (await lstat(outputProjectPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    })) throw new SpineError("OUTPUT_EXISTS", `Spine project already exists: ${outputProjectPath}.`);
+  }
   if (!Number.isSafeInteger(input.samples ?? 6) || (input.samples ?? 6) < 1 || (input.samples ?? 6) > 12) {
     throw new SpineError("INVALID_COMPARISON", "Visual comparison needs 1–12 samples.");
   }
@@ -91,6 +105,7 @@ export async function roundTripEdit(input: RoundTripInput, edits: EditStore) {
   const manifestPath = join(runDir, "manifest.json");
   const startedAt = new Date().toISOString();
   let step = "settings";
+  let publishedSiblingHash: string | undefined;
   try {
     const dataSettingsPath = join(runDir, "data.export.json");
     const previewSettingsPath = join(runDir, "preview.export.json");
@@ -162,6 +177,7 @@ export async function roundTripEdit(input: RoundTripInput, edits: EditStore) {
     }
     const beforeAnimation = inspectAnimation(source, input.animation);
     const stagedDocument = await readDocument(stagedJsonPath);
+    const rig = rigDiff(source, stagedDocument);
     const stagedAnimation = inspectAnimation(stagedDocument, input.afterAnimation ?? input.animation);
     const afterAnimation = inspectAnimation(reexportedDocument, input.afterAnimation ?? input.animation);
     const semantic = compareSemanticFidelity(stagedDocument, reexportedDocument);
@@ -184,6 +200,7 @@ export async function roundTripEdit(input: RoundTripInput, edits: EditStore) {
     const beforeRaw = await renderPreview({ ...renderOptions, inputPath: source.path, animation: input.animation });
     step = "render-after";
     const afterRaw = await renderPreview({ ...renderOptions, inputPath: importedProjectPath,
+      skeleton: basename(reexportedDocument.path, extname(reexportedDocument.path)),
       animation: input.afterAnimation ?? input.animation });
     const selectedFrames = <T>(frames: T[]): T[] => input.editorVersion === "4.2"
       ? frames.slice(input.frameStart ?? 0, input.frameEnd === undefined ? undefined : input.frameEnd + 1) : frames;
@@ -216,6 +233,27 @@ export async function roundTripEdit(input: RoundTripInput, edits: EditStore) {
     if (await hashFile(projectPath) !== sourceProjectHash) {
       throw new SpineError("SOURCE_CHANGED", "The source .spine project changed during the round trip.");
     }
+    let deliveredProject: { path: string; sha256: string } | undefined;
+    if (outputProjectPath) {
+      step = "publish-sibling";
+      if (fidelity.reviewNeeded) {
+        throw new SpineError("EXPORT_FIDELITY_FAILED", "The imported project differs from the staged JSON; inspect the run manifest before delivery.",
+          { fidelity });
+      }
+      try { await copyFile(importedProjectPath, outputProjectPath, constants.COPYFILE_EXCL); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new SpineError("OUTPUT_EXISTS", `Spine project already exists: ${outputProjectPath}.`);
+        }
+        throw error;
+      }
+      publishedSiblingHash = importedProjectHash;
+      if (await hashFile(outputProjectPath) !== importedProjectHash
+        || await hashFile(projectPath) !== sourceProjectHash) {
+        throw new SpineError("SOURCE_CHANGED", "The source or sibling project changed during publication.");
+      }
+      deliveredProject = { path: outputProjectPath, sha256: importedProjectHash };
+    }
     const manifest = { schemaVersion: 1, runId: randomUUID(), status: "complete", startedAt,
       completedAt: new Date().toISOString(), editorVersion: input.editorVersion,
       sourceProject: { path: projectPath, sha256: sourceProjectHash },
@@ -228,6 +266,8 @@ export async function roundTripEdit(input: RoundTripInput, edits: EditStore) {
         sourceHash: stage.sourceHash, stagedJsonPath, stagedHash: stage.afterHash,
         changeCount: stage.changeCount, diagnostics: stage.diagnostics },
       importedProject: { path: importedProjectPath, sha256: importedProjectHash },
+      deliveredProject,
+      rigDiff: rig,
       reexported: { path: reexportedDocument.path, sha256: reexportedDocument.hash,
         diagnostics: reexportedDiagnostics, imagesDir: reexportAssets.imagesDir,
         missingImages: reexportAssetCheck.missingCount },
@@ -253,6 +293,10 @@ export async function roundTripEdit(input: RoundTripInput, edits: EditStore) {
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
     return { runDir, manifestPath, manifest, stage, before, after, comparison };
   } catch (error) {
+    if (outputProjectPath && publishedSiblingHash
+      && await hashFile(outputProjectPath).catch(() => undefined) === publishedSiblingHash) {
+      await rm(outputProjectPath, { force: true }).catch(() => undefined);
+    }
     await writeFile(join(runDir, "failure.json"), `${JSON.stringify({ status: "failed", step,
       failedAt: new Date().toISOString(), code: error instanceof SpineError ? error.code : "INTERNAL_ERROR",
       message: error instanceof Error ? error.message : String(error) }, null, 2)}\n`).catch(() => undefined);

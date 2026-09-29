@@ -8,7 +8,7 @@ export const SERVER_INSTRUCTIONS = [
   "Read spine-docs://reference/start-here; use spine_search_reference for task guides, spine_workflow_guide({goal:'choose'}) for workflows, and spine_capabilities for tools.",
   "For separate-image rigs, connect and preview the full draft; show it, ask approval, then end your turn. While awaiting approval, do not build, poll, or sleep. The user may edit and save in the linked browser editor; build the last saved rig only after a new user message approves it. Other changes require a new preview.",
   "For JSON edits, review the staged edit's diagnostics and net diff; revise with spine_preview_edit and baseEditId if needed, then commit the chosen editId.",
-  "Use spine_finalize_animation for native final delivery.",
+  "Use spine_round_trip_edit for existing .spine projects; use spine_finalize_animation for reviewed JSON delivery.",
   CLEANUP_GUIDANCE,
 ].join(" ");
 
@@ -41,12 +41,13 @@ const WORKFLOWS = {
       RIG_READY_NEXT_ACTION],
   },
   round_trip: {
-    useWhen: "Edit an existing .spine project and verify its new version.",
+    useWhen: "Edit an existing .spine project, including rig structure, and verify a new sibling project.",
     primaryTools: ["spine_round_trip_edit"],
     needs: [".spine project", "saved JSON export settings with nonessential: true",
       "saved PNG export settings", "animation name", "edit operations", "licensed Spine CLI and display/OpenGL"],
-    steps: ["spine_round_trip_edit exports, stages, imports, re-exports, validates, and renders both versions.",
-      "Inspect contactSheetUri, pairs, projectPath, and the run manifest."],
+    steps: ["Pass the source project and edit operations; add outputProjectPath for a new .spine sibling.",
+      "spine_round_trip_edit exports the source, stages edits, reports rigDiff, imports, re-exports, and renders both versions.",
+      "Inspect rigDiff, fidelity, contactSheetUri, pairs, and the run manifest. The source stays unchanged; imported siblings may omit editor-only project details."],
   },
   final_delivery: {
     useWhen: "Deliver reviewed JSON as a native .spine project and two previews.",
@@ -54,7 +55,8 @@ const WORKFLOWS = {
     needs: ["reviewed Spine JSON", "saved JSON and PNG export settings", "animation name",
       "images or an atlas", "licensed Spine CLI and display/OpenGL"],
     steps: ["After review and commit, call spine_finalize_animation with the JSON path and export settings.",
-      "It verifies the re-export, renders frames, and creates a contact sheet and HTML player; it updates a matching .spine project or creates one.",
+      "It verifies the re-export, renders frames, and creates a contact sheet and HTML player in a new project.",
+      "Replacing a matching original requires replaceExistingProject: true and creates a backup; JSON import can lose editor-only project details.",
       "Deliver projectPath, htmlPath, and contactSheetPath together; inspect previewReview hints and full manifest review when needed."],
   },
   new_motion: {

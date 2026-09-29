@@ -29,6 +29,6 @@ Put a PNG at `/path/to/images/hand.png`, then stage the setup with `spine_previe
 }
 ```
 
-Review diagnostics and diff, then `spine_commit_edit` for simple or animation-only data. Multi-part rig structure commits, `spine_import_data`, and `spine_finalize_animation` require a matching build from a reviewed preview in the current server session; use the workflow above for separate images. `spine_create_project` creates starting JSON and a `.spine` snapshot.
+Review diagnostics and diff, then `spine_commit_edit` for simple or animation-only data. Multi-part rig structure commits, `spine_import_data`, and `spine_finalize_animation` require a matching build from a reviewed preview in the current server session; use the workflow above for separate images. For edits to an established `.spine` project, use [the project round trip](round-trip.md), which verifies the source and creates a new sibling. `spine_create_project` creates starting JSON and a `.spine` snapshot.
 
 To add a clip and keys, follow [Stage JSON edits](edit-json.md).

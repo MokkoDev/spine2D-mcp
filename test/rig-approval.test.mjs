@@ -8,7 +8,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
 import { parseDocument } from "../dist/spine/document.js";
-import { rigSignature } from "../dist/spine/rig-approval.js";
+import { rigDiff, rigSignature } from "../dist/spine/rig-approval.js";
 
 test("Spine 4.3 constraint removal changes the rig signature and requires review to commit", { timeout: 30_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "spine-rig-constraint-review-"));
@@ -30,8 +30,13 @@ test("Spine 4.3 constraint removal changes the rig signature and requires review
   const original = JSON.stringify(data);
   const withoutConstraint = structuredClone(data);
   withoutConstraint.constraints = [];
-  assert.notEqual(rigSignature(parseDocument(path, original)),
-    rigSignature(parseDocument(path, JSON.stringify(withoutConstraint))));
+  const before = parseDocument(path, original);
+  const after = parseDocument(path, JSON.stringify(withoutConstraint));
+  assert.notEqual(rigSignature(before), rigSignature(after));
+  const diff = rigDiff(before, after);
+  assert.equal(diff.changed, true);
+  assert.ok(diff.changes.some((change) => change.path === "/constraints"
+    && change.before === "<array: 1 item(s)>" && change.after === "<missing>"));
 
   const client = new Client({ name: "rig-constraint-review-test", version: "0.1.0" });
   const transport = new StdioClientTransport({ command: new URL("../startup.sh", import.meta.url).pathname });

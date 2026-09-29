@@ -4,22 +4,35 @@ import { dirname, resolve } from "node:path";
 
 import type { SpineDocument } from "./document.js";
 import { SpineError } from "./errors.js";
+import { compareSemanticFidelity } from "./fidelity.js";
 import { readRigManifest, validateRigManifest } from "./landmark-rig.js";
 
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-export function rigSignature(document: SpineDocument): string {
+function rigData(document: SpineDocument): Record<string, unknown> {
   const data = document.data;
   const skeleton = object(data.skeleton);
-  return createHash("sha256").update(JSON.stringify({
-    version: document.version,
-    images: skeleton.images,
+  return {
+    skeleton: { spine: document.version, images: skeleton.images },
     bones: data.bones ?? [], slots: data.slots ?? [], skins: data.skins ?? [],
     ik: data.ik ?? [], transform: data.transform ?? [], path: data.path ?? [], physics: data.physics ?? [],
     constraints: data.constraints ?? [],
-  })).digest("hex");
+  };
+}
+
+export function rigSignature(document: SpineDocument): string {
+  return createHash("sha256").update(JSON.stringify(rigData(document))).digest("hex");
+}
+
+export function rigDiff(before: SpineDocument, after: SpineDocument) {
+  const comparison = compareSemanticFidelity(
+    { ...before, data: rigData(before) }, { ...after, data: rigData(after) });
+  return { changed: rigSignature(before) !== rigSignature(after),
+    changeCount: comparison.differenceCount, changes: comparison.differences.map((difference) => ({
+      path: difference.path, before: difference.staged, after: difference.reexported,
+    })), changesTruncated: comparison.differencesTruncated };
 }
 
 function imagePaths(document: SpineDocument): Set<string> {
@@ -62,7 +75,7 @@ export async function requireReviewedRig(document: SpineDocument, reviewed: Read
   if (attachmentCount(document) < 2) return;
   if (reviewed.size && reviewed.has(await rigArtifactFingerprint(document).catch(() => ""))) return;
   throw new SpineError("RIG_REVIEW_REQUIRED",
-    "This multi-part rig has no matching reviewed build in this server session. Assemble and preview it, obtain the user's approval in chat, then build it with the preview reviewId.",
+    "This multi-part rig has no matching reviewed build in this server session. For an existing .spine source, use spine_round_trip_edit. For a new rig, preview the assembly, obtain the user's approval in chat, then build with the reviewId.",
     { path: document.path, attachmentCount: attachmentCount(document) });
 }
 

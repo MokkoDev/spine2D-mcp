@@ -31,6 +31,7 @@ export interface FinalizeAnimationInput {
   runtimeJsPath?: string;
   runtimeCssPath?: string;
   existingProjectPath?: string;
+  replaceExistingProject?: boolean;
 }
 
 async function hashFile(path: string): Promise<string> {
@@ -92,6 +93,9 @@ export async function finalizeAnimation(input: FinalizeAnimationInput) {
   }
   const reviewedAnimation = inspectAnimation(source, input.animation);
   const siblingProjectPath = resolve(dirname(source.path), `${basename(source.path, extname(source.path))}.spine`);
+  if (input.existingProjectPath && !input.replaceExistingProject) {
+    throw new SpineError("REPLACEMENT_NOT_SELECTED", "Set replaceExistingProject to replace the selected project after verification.");
+  }
   const selectedProjectPath = resolve(input.existingProjectPath ?? siblingProjectPath);
   if (extname(selectedProjectPath).toLowerCase() !== ".spine") {
     throw new SpineError("INVALID_PROJECT_PATH", "An existing project path must end in .spine.");
@@ -100,14 +104,14 @@ export async function finalizeAnimation(input: FinalizeAnimationInput) {
     if (error.code === "ENOENT") return undefined;
     throw error;
   });
-  if (input.existingProjectPath && !selectedProjectStat) {
+  if (input.replaceExistingProject && !selectedProjectStat) {
     throw new SpineError("PROJECT_NOT_FOUND", `Spine project does not exist: ${selectedProjectPath}.`);
   }
-  if (selectedProjectStat && (!selectedProjectStat.isFile() || selectedProjectStat.isSymbolicLink())) {
+  if (input.replaceExistingProject && selectedProjectStat && (!selectedProjectStat.isFile() || selectedProjectStat.isSymbolicLink())) {
     throw new SpineError("INVALID_PROJECT_PATH", "The existing Spine project must be a regular file.",
       { projectPath: selectedProjectPath });
   }
-  const existingProjectPath = selectedProjectStat ? selectedProjectPath : undefined;
+  const existingProjectPath = input.replaceExistingProject && selectedProjectStat ? selectedProjectPath : undefined;
   const configured = (source.data.skeleton as Record<string, unknown> | undefined)?.images;
   const configuredImages = typeof configured === "string" ? configured : "./images/";
   const sourceImages = resolve(input.imagesDir ?? (isAbsolute(configuredImages)

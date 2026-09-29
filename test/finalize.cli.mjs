@@ -94,9 +94,19 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
     await writeFile(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
     await importData(baselinePath, existingProjectPath, "rig", version, 120_000);
     const beforeProject = await readFile(existingProjectPath);
+    if (version === "4.3") {
+      const siblingResponse = await client.callTool({ name: "spine_finalize_animation", arguments: {
+        dataPath, dataSettingsPath, previewSettingsPath, outputDir: join(directory, "sibling-deliveries"),
+        editorVersion: version, animation: "turn", samples: 3,
+      } });
+      assert.equal(siblingResponse.isError, undefined, JSON.stringify(siblingResponse.structuredContent));
+      assert.equal(siblingResponse.structuredContent.projectMode, "created");
+      assert.notEqual(siblingResponse.structuredContent.projectPath, existingProjectPath);
+      assert.deepEqual(await readFile(existingProjectPath), beforeProject);
+    }
     const updatedResponse = await client.callTool({ name: "spine_finalize_animation", arguments: {
       dataPath, dataSettingsPath, previewSettingsPath, outputDir: join(directory, "updated-deliveries"),
-      editorVersion: version, animation: "turn", samples: 3, ...existingProjectInput,
+      editorVersion: version, animation: "turn", samples: 3, replaceExistingProject: true, ...existingProjectInput,
     } });
     assert.equal(updatedResponse.isError, undefined, JSON.stringify(updatedResponse.structuredContent));
     const updated = updatedResponse.structuredContent;
@@ -114,7 +124,7 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
     const missingImages = await client.callTool({ name: "spine_finalize_animation", arguments: {
       dataPath, dataSettingsPath, previewSettingsPath, outputDir: join(directory, "missing-images-deliveries"),
       editorVersion: version, animation: "turn", samples: 3,
-      existingProjectPath: isolatedProjectPath,
+      existingProjectPath: isolatedProjectPath, replaceExistingProject: true,
     } });
     assert.equal(missingImages.isError, true);
     assert.equal(missingImages.structuredContent.code, "MISSING_IMAGES");
@@ -126,7 +136,7 @@ for (const version of ["4.2", "4.3"]) test(`MCP finalizes Spine ${version} JSON 
     try {
       const mismatch = await client.callTool({ name: "spine_finalize_animation", arguments: {
         dataPath, dataSettingsPath, previewSettingsPath, outputDir: join(directory, "mismatch-deliveries"),
-        editorVersion: version, animation: "turn", samples: 3, ...existingProjectInput,
+        editorVersion: version, animation: "turn", samples: 3, replaceExistingProject: true, ...existingProjectInput,
       } });
       assert.equal(mismatch.isError, true);
       assert.equal(mismatch.structuredContent.code, "EXISTING_PROJECT_MISMATCH");

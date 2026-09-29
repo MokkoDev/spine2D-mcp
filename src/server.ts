@@ -706,7 +706,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_import_data",
     {
-      description: "Validate Spine 4.2 or 4.3 JSON and import it into a new .spine project without overwriting an existing file.",
+      description: "Import reviewed Spine 4.2 or 4.3 JSON into a new project. For edits to an existing project, use spine_round_trip_edit with the source .spine file.",
       inputSchema: z.object({ dataPath: z.string().min(1), outputProjectPath: z.string().min(1), editorVersion: z.string().min(1), skeletonName: z.string().min(1).optional(), timeoutMs: z.number().int().min(1_000).max(600_000).optional() }),
     },
     async ({ dataPath, outputProjectPath, editorVersion, skeletonName, timeoutMs }) => runTool(async () => {
@@ -1110,8 +1110,8 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.roundTripEdit,
     {
-      description: "Use for an existing .spine project when edits need import and visual verification. Export, stage, import a new project, then compare staged and re-exported data and rendered frames.",
-      inputSchema: z.object({ projectPath: z.string().min(1), dataSettingsPath: z.string().min(1),
+      description: "Edit a verified .spine source, including its rig. Show rig diff, re-export, and render; outputProjectPath publishes a new sibling. JSON import may omit editor-only details.",
+      inputSchema: z.object({ projectPath: z.string().min(1), outputProjectPath: z.string().min(1).optional(), dataSettingsPath: z.string().min(1),
         previewSettingsPath: z.string().min(1), outputDir: z.string().min(1),
         editorVersion: z.enum(["4.2", "4.3"]), animation: z.string().min(1),
         afterAnimation: z.string().min(1).optional(), operations: z.array(operationSchema).min(1).max(20),
@@ -1128,11 +1128,6 @@ export function createServer(): McpServer {
         timeoutMs: z.number().int().min(1_000).max(600_000).optional() }),
     },
     async (input) => runTool(async () => {
-      const animationOperations = new Set(["retime_animation", "bulk_keys", "make_loop", "set_curve", "replace_keyframe",
-        "set_keyframe", "delete_keyframe", "upsert_animation", "clone_animation", "reverse_bone_animation",
-        "retarget_animation", "remove_animation", "cleanup_curves", "transform_animation", "upsert_event", "remove_event"]);
-      if (input.operations.some((operation) => !animationOperations.has(operation.kind)))
-        throw new SpineError("RIG_REVIEW_REQUIRED", "Rig structure changes need the assembled rig review and explicit user confirmation before a new project can be created.");
       const result = await roundTripEdit(input, edits);
       const beforePublished = publishPreview(result.before, { kind: "file",
         sourcePath: result.manifest.edit.sourceJsonPath, sourceHash: result.manifest.edit.sourceHash });
@@ -1145,7 +1140,9 @@ export function createServer(): McpServer {
       return { runDir: result.runDir, manifestPath: result.manifestPath,
         editId: result.stage.editId, diffResourceUri: result.stage.diffResourceUri,
         sourceJsonPath: result.manifest.edit.sourceJsonPath,
-        projectPath: result.manifest.importedProject.path,
+        projectPath: result.manifest.deliveredProject?.path ?? result.manifest.importedProject.path,
+        sourceProject: result.manifest.sourceProject,
+        rigDiff: result.manifest.rigDiff,
         reexportedJsonPath: result.manifest.reexported.path,
         changeCount: result.stage.changeCount, diagnostics: result.stage.diagnostics,
         animation: { beforeName: result.manifest.animation.beforeName,
@@ -1181,11 +1178,12 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.finalizeAnimation,
     {
-      description: "Deliver reviewed JSON as a native .spine project, HTML player, and contact sheet. Verify re-export and frames; update and back up a matching sibling project, or create one.",
+      description: "Deliver reviewed JSON as a new .spine project, HTML player, and contact sheet after re-export and render checks. Replacing a matching project requires replaceExistingProject: true and creates a backup; JSON import may lose editor-only details.",
       inputSchema: z.object({ dataPath: z.string().min(1), dataSettingsPath: z.string().min(1),
         previewSettingsPath: z.string().min(1), outputDir: z.string().min(1),
         editorVersion: z.enum(["4.2", "4.3"]), animation: z.string().min(1),
         existingProjectPath: z.string().min(1).optional(),
+        replaceExistingProject: z.boolean().optional(),
         atlasPath: z.string().min(1).optional(), imagesDir: z.string().min(1).optional(),
         skin: z.string().min(1).optional(), fps: z.number().int().min(1).max(120).optional(),
         display: z.string().min(1).max(255).optional(), samples: z.number().int().min(1).max(12).optional(),

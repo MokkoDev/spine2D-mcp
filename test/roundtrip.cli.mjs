@@ -29,9 +29,12 @@ for (const version of ["4.2", "4.3"]) test(`MCP round trips a Spine ${version} p
     const png = new PNG({ width: 16, height: 16 });
     png.data.fill(255);
     await writeFile(join(directory, "images", "sheet.png"), PNG.sync.write(png));
+    await writeFile(join(directory, "images", "head.png"), PNG.sync.write(png));
     const data = JSON.parse(skeletonText(version));
     data.slots.push({ name: "body", bone: "root", attachment: "sheet" });
+    data.slots.push({ name: "head", bone: "root", attachment: "head" });
     data.skins[0].attachments.body = { sheet: { type: "region", width: 16, height: 16 } };
+    data.skins[0].attachments.head = { head: { type: "region", width: 16, height: 16 } };
     data.animations.turn = { bones: { root: { rotate: [
       { time: 0, value: 0 }, { time: 1, value: 45 },
     ] } } };
@@ -45,24 +48,25 @@ for (const version of ["4.2", "4.3"]) test(`MCP round trips a Spine ${version} p
       packTarget: "single", warnings: true, version: null, all: true,
       output: "", id: -1, input: "", open: false,
     }));
-    await writeFile(previewSettingsPath, JSON.stringify({
-      class: "export-png", exportType: "animation", skeletonType: "single", skeleton: "rig",
-      animationType: "single", animation: "turn", skinType: "current", skinNone: false,
-      renderImages: true, renderBones: false, scale: 100, fps: 4, lastFrame: false,
-      rangeStart: 0, rangeEnd: 2, packAtlas: null, output: "", id: -1, input: "", open: false,
-      frameStart: 0, frameEnd: 2, editorVersion: version,
-    }));
+    // The round trip must select the imported project's skeleton without a saved selector.
+    await writeFile(previewSettingsPath, JSON.stringify({ class: "export-png", fps: 4 }));
     await client.connect(transport);
     const response = await client.callTool({ name: "spine_round_trip_edit", arguments: {
       projectPath, dataSettingsPath, previewSettingsPath, outputDir: join(directory, "runs"),
+      outputProjectPath: join(directory, "rig-edited.spine"),
       editorVersion: version, animation: "turn", imagesDir: join(directory, "images"),
-      operations: [{ kind: "retime_animation", animation: "turn", scale: 2 }],
+      operations: [{ kind: "retime_animation", animation: "turn", scale: 2 },
+        { kind: "upsert_bone", name: "root", values: { length: 10 } }],
       frameStart: 0, frameEnd: 2, samples: 2,
     } });
     assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
     assert.deepEqual(response.content, []);
     const result = response.structuredContent;
-    assert.equal(result.changeCount, 1);
+    assert.equal(result.changeCount, 2);
+    assert.equal(result.projectPath, join(directory, "rig-edited.spine"));
+    assert.equal(result.rigDiff.changed, true);
+    assert.ok(result.rigDiff.changes.some((change) => change.path === "/bones/0/length"));
+    assert.ok(result.sourceProject.sha256);
     assert.equal(result.animation.before.duration, 1);
     assert.equal(result.animation.after.duration, 2);
     assert.equal(result.animation.fidelity.reviewNeeded, false);
