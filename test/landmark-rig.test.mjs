@@ -49,7 +49,7 @@ for (const version of ["4.2","4.3"]) test(`landmark compiler places padded, rota
       close([placement.center[0]+rotate([p[0]-part.width/2,part.height/2-p[1]],placement.imageAngleDeg)[0],placement.center[1]+rotate([p[0]-part.width/2,part.height/2-p[1]],placement.imageAngleDeg)[1]],placement.pivot,1e-5);
       assert.equal(a.width,part.width);assert.equal(a.height,part.height);
     }
-    assert.equal(document.data.skeleton.images,"images/");
+    assert.equal(document.data.skeleton.images,"./images/");
     const result=await buildRigFromLandmarks({manifestPath,outputDataPath:dataPath,editorVersion:version});
     assert.equal(result.outputDataPath,dataPath);
     assert.deepEqual(await readRigManifest(manifestPath),m);

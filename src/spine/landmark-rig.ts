@@ -288,6 +288,7 @@ export function compileRig(manifest: RigManifest, manifestPath: string, outputDa
   }
   let imagePath = relative(dirname(resolve(outputDataPath)), imageDirectory(manifest, manifestPath)).split(sep).join("/");
   if (!imagePath) imagePath = ".";
+  if (!imagePath.startsWith(".")) imagePath = `./${imagePath}`;
   if (!imagePath.endsWith("/")) imagePath += "/";
   const data = { skeleton: { spine: manifest.spineVersion, fps: 30, images: imagePath }, bones, slots,
     skins: [{ name: "default", attachments }], animations: {} };

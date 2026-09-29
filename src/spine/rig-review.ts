@@ -1,10 +1,10 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { SpineError } from "./errors.js";
-import { buildRigFromLandmarks, calculateRigPlacements, imageDirectory, inventoryImages, readImageInfo, readRigManifest, suggestRigManifest, validateRigManifest, type RigManifest } from "./landmark-rig.js";
+import { calculateRigPlacements, imageDirectory, inventoryImages, readImageInfo, readRigManifest, suggestRigManifest, validateRigManifest, type RigManifest } from "./landmark-rig.js";
 import { RIG_INCOMPLETE_NEXT_ACTION, RIG_READY_NEXT_ACTION } from "../workflow-guide.js";
 
 function scriptJson(value: unknown) { return JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll("\u2028", "\\u2028").replaceAll("\u2029", "\\u2029"); }
@@ -69,7 +69,7 @@ export async function reviewHtml(manifest: RigManifest, manifestPath: string, to
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Spine rig review</title>
 <style>
 :root{font:14px system-ui,sans-serif;color:#e6e9ed;background:#171b22}*{box-sizing:border-box}body{margin:0}header{padding:14px 20px;border-bottom:1px solid #344052;display:flex;gap:16px;align-items:center;flex-wrap:wrap}h1{font-size:18px;margin:0}button,input,select{font:inherit}button{background:#344b65;border:1px solid #66809b;color:#fff;padding:5px 9px;border-radius:4px;cursor:pointer}button:hover{background:#476788}button:disabled{opacity:.45;cursor:default}label{display:inline-flex;align-items:center;gap:5px}select,input[type=number],input[type=text]{background:#202b38;border:1px solid #536679;color:#fff;padding:4px;max-width:160px}input[type=range]{vertical-align:middle}.layout{display:grid;grid-template-columns:260px minmax(350px,1fr) minmax(350px,1fr);min-height:calc(100vh - 66px)}aside{border-right:1px solid #344052;padding:14px 14px 72px;display:flex;flex-direction:column;gap:12px}.views{grid-column:span 2;display:grid;grid-template-columns:1fr 1fr}.view{padding:12px;min-width:0}.view:first-child{border-right:1px solid #344052}h2{font-size:16px;margin:0}.view-heading{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}.view-heading button{font-size:12px}.canvas-wrap{overflow:auto;border:1px solid #526074;background:#272c35}canvas{display:block;width:100%;height:auto;touch-action:none;cursor:crosshair}.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:7px}.history-actions{position:fixed;left:12px;bottom:12px;z-index:5;display:flex;gap:6px;padding:6px;background:#202b38;border:1px solid #526074;border-radius:6px}.muted{color:#aeb9c7;font-size:12px}.status{min-height:2em;white-space:pre-wrap}.landmarks{max-height:220px;overflow:auto}.landmark{padding:3px 0}footer{padding:8px 15px;border-top:1px solid #344052;color:#aeb9c7}@media(max-width:1100px){.layout{display:block}.views{display:block}.view:first-child{border-right:0}.canvas-wrap{max-width:800px}}
-</style></head><body><header><h1>Spine rig review</h1><span id="file"></span><button id="save" type="button">Save now</button><button id="refresh-images" hidden>Review changed PNGs</button><button id="download">Download manifest</button><button id="build">Build native project</button><span id="save-state" class="muted"></span></header>
+</style></head><body><header><h1>Spine rig review</h1><span id="file"></span><button id="save" type="button">Save now</button><button id="refresh-images" hidden>Review changed PNGs</button><button id="download">Download manifest</button><span class="muted">Build through the MCP after user confirmation</span><span id="save-state" class="muted"></span></header>
 <div class="layout"><aside>
 <div class="stack"><label>Part <select id="part"></select></label><label>Zoom <input id="zoom" type="range" min="0.5" max="5" step="0.1" value="2"><span id="zoom-value">2×</span></label></div>
 <div class="stack"><strong>Landmarks</strong><div id="landmarks" class="landmarks"></div><div class="row"><input id="new-landmark" type="text" placeholder="new landmark name"><button id="add-landmark">Add</button></div><div class="muted">Drag a marker to adjust its position. Coordinates use the full PNG canvas.</div></div>
@@ -118,7 +118,6 @@ function download(){const blob=new Blob([JSON.stringify(m,null,2)+'\\n'],{type:'
 function scheduleSave(delay=500){if(location.protocol==='file:')return;clearTimeout(saveTimer);saveTimer=setTimeout(()=>{saveTimer=null;void save()},delay)}
 async function save(){clearTimeout(saveTimer);saveTimer=null;if(location.protocol==='file:'){download();status.textContent='Downloaded manifest. Use the local editor URL for autosave.';return false}if(savePromise){const okay=await savePromise;return okay?save():false}const snapshot=JSON.stringify(m);if(snapshot===saved){dirty();return true}const hash=savedHash;savePromise=(async()=>{try{const res=await fetch('/manifest?token='+encodeURIComponent(boot.token),{method:'POST',headers:{'Content-Type':'application/json','If-Match':hash},body:snapshot}),data=await res.json();if(!res.ok)throw Error(data.message||'Save failed');saved=snapshot;savedHash=data.hash;status.textContent='Autosaved. '+data.errors.length+' build errors, '+data.visualWarnings.length+' visual warnings.'+(data.htmlUpdateWarning?' Standalone HTML update: '+data.htmlUpdateWarning:'');return true}catch(err){status.textContent='Autosave failed: '+String(err);return false}})();dirty();const okay=await savePromise;savePromise=null;dirty();return okay&&JSON.stringify(m)!==saved?save():okay}$('save').onclick=()=>{void save()};
 $('undo').onclick=undo;$('redo').onclick=redo;document.addEventListener('keydown',e=>{if(!(e.ctrlKey||e.metaKey)||e.altKey||e.key.toLowerCase()!=='z')return;if(e.target?.closest?.('input[type=text],textarea,[contenteditable=true]'))return;e.preventDefault();if(e.shiftKey)redo();else undo()});
-$('build').onclick=async()=>{if(location.protocol==='file:'){download();status.textContent='Downloaded manifest. Use spine_build_rig_from_landmarks to build.';return}if(!(await save()))return;status.textContent='Building…';try{const res=await fetch('/build?token='+encodeURIComponent(boot.token),{method:'POST'}),data=await res.json();if(!res.ok)throw Error(data.message||'Build failed');status.textContent='Built '+data.outputDataPath+(data.outputProjectPath?' and '+data.outputProjectPath:'')}catch(err){status.textContent=String(err)}};
 sync();if(boot.diagnostics.length)status.textContent=boot.diagnostics.slice(0,5).map(d=>d.code+': '+d.message).join('\\n')+(boot.diagnostics.length>5?'\\n… '+(boot.diagnostics.length-5)+' more diagnostics':'');if(JSON.stringify(m)!==saved)scheduleSave();})();
 </script></body></html>`;
 }
@@ -179,13 +178,7 @@ export async function startRigReview(input: { imagesDir: string; manifestPath?: 
       return;
     }
     if (request.method === "POST" && url.pathname === "/build") {
-      try {
-        const name = basename(manifestPath, ".json");
-        const run = randomUUID();
-        const result = await buildRigFromLandmarks({ manifestPath, outputDataPath: join(outputDir, `${name}-${run}.json`),
-          outputProjectPath: join(outputDir, `${name}-${run}.spine`), editorVersion: input.editorVersion });
-        json(200, result);
-      } catch (error) { json(400, { message: error instanceof Error ? error.message : String(error) }); }
+      json(403, { code: "RIG_CONFIRMATION_REQUIRED", message: "Preview and confirm the rig through the MCP client before building." });
       return;
     }
     json(404, { message: "Unknown route." });
