@@ -4,7 +4,9 @@
 
 Use `spine_start_rig_review` to open the browser editor and receive the starter manifest and `sourceHash`. Its starter manifest may leave parts unconnected in a tray. Assign every nonroot part a parent landmark, place all art and joints, set draw order, and call `spine_save_rig_draft` with the full assembled manifest and `sourceHash`. Reload the editor URL to see the connected character. Use `spine_validate_rig_manifest` to resolve errors, then `spine_preview_rig` to inspect the setup and bend snapshots.
 
-Show the assembled character, editable review link, bone hierarchy, joints, attachment placement, and draw order to the user. Call `spine_confirm_rig_review` with the `reviewId` from `spine_preview_rig`. The MCP client must obtain explicit user approval; unsupported clients and declined prompts leave the rig unapproved. Pass that same `reviewId` to `spine_build_rig_from_landmarks` only after confirmation returns `approved: true`. Changing the manifest or a PNG invalidates the preview and confirmation. A saved draft, tool result, or elapsed time is not approval. See [FUNCTIONS.md](../../FUNCTIONS.md) for tool inputs.
+Show the assembled character, editable review link, bone hierarchy, joints, attachment placement, and draw order to the user. Ask whether they approve this exact rig, then **end the turn**. Do not call another tool, poll, sleep, or keep the turn open while waiting. A saved draft, tool result, or elapsed time is not approval.
+
+After a **new user message** explicitly approves the unchanged rig, call `spine_confirm_rig_review` with the `reviewId` from `spine_preview_rig`. Its MCP client prompt must also receive user approval; unsupported clients and declined prompts leave the rig unapproved. Pass that same `reviewId` to `spine_build_rig_from_landmarks` only after confirmation returns `approved: true`. If the user asks for changes or the manifest or a PNG changes, revise and preview again. See [FUNCTIONS.md](../../FUNCTIONS.md) for tool inputs.
 
 ## Create a skeleton directly
 

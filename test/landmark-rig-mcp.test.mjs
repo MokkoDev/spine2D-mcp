@@ -54,6 +54,7 @@ test("MCP rig workflow starts review, previews a draft, validates saved joints, 
     await client.connect(transport);
     const menu=result(await client.callTool({name:"spine_workflow_guide",arguments:{goal:"rig_review"}}));
     assert.ok(menu.primaryTools.includes("spine_start_rig_review"));
+    assert.ok(menu.steps.some(step=>step.includes("end your turn")&&step.includes("new user message")));
     const started=result(await client.callTool({name:"spine_start_rig_review",arguments:{imagesDir:images,outputDir:join(folder,"review"),editorVersion:"4.2"}}));
     assert.match(started.url,/^http:\/\/127\.0\.0\.1:/);
     const draft=result(await client.callTool({name:"spine_validate_rig_manifest",arguments:{manifestPath:started.manifestPath}}));
@@ -61,6 +62,10 @@ test("MCP rig workflow starts review, previews a draft, validates saved joints, 
     const preview=result(await client.callTool({name:"spine_preview_rig",arguments:{manifestPath:started.manifestPath,outputDir:join(folder,"previews")}}));
     assert.equal(preview.snapshots.length,3);
     assert.match(preview.reviewId,/^[0-9a-f-]{36}$/);
+    assert.equal(preview.reviewStatus,"awaiting_user_confirmation");
+    assert.match(preview.nextAction,/end your turn/);
+    assert.match(preview.nextAction,/Do not call spine_confirm_rig_review/);
+    assert.equal(approvalRequests,0);
     const m=JSON.parse(await readFile(started.manifestPath,"utf8"));m.parts[0].setupRotationDeg=5;
     const page=await (await fetch(started.url)).text();assert.match(page,/Part view/);
     const token=new URL(started.url).searchParams.get("token"),hash=(await import("node:crypto")).createHash("sha256").update(JSON.stringify(JSON.parse(await readFile(started.manifestPath,"utf8")))).digest("hex");

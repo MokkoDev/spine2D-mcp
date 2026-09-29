@@ -567,7 +567,7 @@ export function createServer(): McpServer {
 
   server.registerTool(
     TOOL_NAMES.confirmRigReview,
-    { description: "Request explicit user confirmation through the MCP client for a previously rendered rig preview. Decline and unsupported clients leave the rig unapproved.",
+    { description: "Call only after a new user message explicitly approves the previously rendered rig preview. The MCP client then requests user confirmation. Decline and unsupported clients leave the rig unapproved.",
       inputSchema: z.object({ reviewId: z.uuid() }) },
     async ({ reviewId }, ctx) => runTool(async () => {
       const review = rigReviews.get(reviewId);
@@ -627,7 +627,8 @@ export function createServer(): McpServer {
       rigReviews.set(reviewId, { manifestPath: path, fingerprint: before, previewDir: result.previewDir,
         setupPath: result.snapshots[0].path, reviewUrl, approved: false });
       if (rigReviews.size > 20) rigReviews.delete(rigReviews.keys().next().value!);
-      return { ...result, reviewId, ...(reviewUrl ? { reviewUrl } : {}), nextAction: "Show the setup, bends, hierarchy, joints, and draw order to the user; then call spine_confirm_rig_review and wait for the client's explicit user confirmation." };
+      return { ...result, reviewId, reviewStatus: "awaiting_user_confirmation", ...(reviewUrl ? { reviewUrl } : {}),
+        nextAction: RIG_CONFIRMATION_RULE };
     }),
   );
 
