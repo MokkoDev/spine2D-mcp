@@ -116,13 +116,14 @@ $('pose-test').onclick=()=>{if(testing)return;testing=true;const id=selected,sta
 $('refresh-images').onclick=()=>{let count=0;for(const p of m.parts){const a=boot.actual[p.id];if(a&&(p.width!==a.width||p.height!==a.height||p.sha256!==a.sha256)){p.width=a.width;p.height=a.height;p.sha256=a.sha256;count++}}if(count){sync();changed();status.textContent=count+' changed PNGs need landmark review. Reposition their markers where needed.'}};
 function download(){const blob=new Blob([JSON.stringify(m,null,2)+'\\n'],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=boot.manifestPath.split(/[\\/]/).pop();a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}$('download').onclick=download;
 function scheduleSave(delay=500){if(location.protocol==='file:')return;clearTimeout(saveTimer);saveTimer=setTimeout(()=>{saveTimer=null;void save()},delay)}
-async function save(){clearTimeout(saveTimer);saveTimer=null;if(location.protocol==='file:'){download();status.textContent='Downloaded manifest. Use the local editor URL for autosave.';return false}if(savePromise){const okay=await savePromise;return okay?save():false}const snapshot=JSON.stringify(m);if(snapshot===saved){dirty();return true}const hash=savedHash;savePromise=(async()=>{try{const res=await fetch('/manifest?token='+encodeURIComponent(boot.token),{method:'POST',headers:{'Content-Type':'application/json','If-Match':hash},body:snapshot}),data=await res.json();if(!res.ok)throw Error(data.message||'Save failed');saved=snapshot;savedHash=data.hash;status.textContent='Autosaved. '+data.errors.length+' build errors, '+data.visualWarnings.length+' visual warnings.'+(data.htmlUpdateWarning?' Standalone HTML update: '+data.htmlUpdateWarning:'');return true}catch(err){status.textContent='Autosave failed: '+String(err);return false}})();dirty();const okay=await savePromise;savePromise=null;dirty();return okay&&JSON.stringify(m)!==saved?save():okay}$('save').onclick=()=>{void save()};
+async function save(){clearTimeout(saveTimer);saveTimer=null;if(location.protocol==='file:'){download();status.textContent='Downloaded manifest. Use the local editor URL for autosave.';return false}if(savePromise){const okay=await savePromise;return okay?save():false}const snapshot=JSON.stringify(m);if(snapshot===saved){dirty();return true}const hash=savedHash;savePromise=(async()=>{try{const res=await fetch('/manifest?token='+encodeURIComponent(boot.token),{method:'POST',headers:{'Content-Type':'application/json','If-Match':hash},body:snapshot}),data=await res.json();if(!res.ok)throw Error(data.message||'Save failed');saved=snapshot;savedHash=data.hash;status.textContent='Autosaved. '+data.errors.length+' build errors, '+data.visualWarnings.length+' visual warnings.'+(data.reviewUpdateWarning?' Review update: '+data.reviewUpdateWarning:'')+(data.htmlUpdateWarning?' Standalone HTML update: '+data.htmlUpdateWarning:'');return true}catch(err){status.textContent='Autosave failed: '+String(err);return false}})();dirty();const okay=await savePromise;savePromise=null;dirty();return okay&&JSON.stringify(m)!==saved?save():okay}$('save').onclick=()=>{void save()};
 $('undo').onclick=undo;$('redo').onclick=redo;document.addEventListener('keydown',e=>{if(!(e.ctrlKey||e.metaKey)||e.altKey||e.key.toLowerCase()!=='z')return;if(e.target?.closest?.('input[type=text],textarea,[contenteditable=true]'))return;e.preventDefault();if(e.shiftKey)redo();else undo()});
 sync();if(boot.diagnostics.length)status.textContent=boot.diagnostics.slice(0,5).map(d=>d.code+': '+d.message).join('\\n')+(boot.diagnostics.length>5?'\\n… '+(boot.diagnostics.length-5)+' more diagnostics':'');if(JSON.stringify(m)!==saved)scheduleSave();})();
 </script></body></html>`;
 }
 
-export async function startRigReview(input: { imagesDir: string; manifestPath?: string; outputDir: string; editorVersion: "4.2" | "4.3" }) {
+export async function startRigReview(input: { imagesDir: string; manifestPath?: string; outputDir: string; editorVersion: "4.2" | "4.3" },
+  onSaved?: (save: { manifestPath: string; token: string; draft: RigManifest; valid: boolean }) => Promise<void>) {
   const imagesDir = resolve(input.imagesDir);
   const manifestPath = resolve(input.manifestPath ?? join(dirname(imagesDir), "rig-landmarks.json"));
   const outputDir = resolve(input.outputDir);
@@ -165,6 +166,9 @@ export async function startRigReview(input: { imagesDir: string; manifestPath?: 
         await checkRigDraftSources(current, next, manifestPath, true);
         const check = await validateRigManifest(next, manifestPath);
         const nextHash = await writeRigDraft(manifestPath, next, currentHash);
+        let reviewUpdateWarning: string | undefined;
+        try { await onSaved?.({ manifestPath, token, draft: next, valid: check.valid }); }
+        catch (error) { reviewUpdateWarning = error instanceof Error ? error.message : String(error); }
         let htmlUpdateWarning: string | undefined;
         try {
           const nextHtml = await reviewHtml(next, manifestPath, token);
@@ -173,6 +177,7 @@ export async function startRigReview(input: { imagesDir: string; manifestPath?: 
           finally { await rm(tempHtml, { force: true }); }
         } catch (error) { htmlUpdateWarning = error instanceof Error ? error.message : String(error); }
         json(200, { manifestPath, hash: nextHash, errors: check.errors, visualWarnings: check.visualWarnings,
+          ...(reviewUpdateWarning ? { reviewUpdateWarning } : {}),
           ...(htmlUpdateWarning ? { htmlUpdateWarning } : {}) });
       } catch (error) { json(400, { message: error instanceof Error ? error.message : String(error) }); }
       return;

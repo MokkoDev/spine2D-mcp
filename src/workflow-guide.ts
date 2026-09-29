@@ -1,12 +1,12 @@
 export const CLEANUP_GUIDANCE = "After work and any pending review finish, remove temporary files unless useful later.";
 export const RIG_ASSEMBLY_RULE = "For new or revised rigs from separate images, connect every nonroot part to a parent landmark, place art and joints, set draw order, and save the full draft with spine_save_rig_draft. An unconnected starter manifest is not ready for review.";
-export const RIG_CONFIRMATION_RULE = "Show the connected preview, editable review link, bone hierarchy, joints, attachment placement, and draw order. Ask whether the user approves this exact rig, then end your turn. Do not build, poll, sleep, or keep the turn active while awaiting a reply. Only a new user message explicitly approving the unchanged rig authorizes spine_build_rig_from_landmarks with spine_preview_rig's reviewId. If declined or changed, revise and preview again. A draft, tool result, or elapsed time is not approval. The server checks the draft and source PNGs for changes; honor the user's chat reply.";
+export const RIG_CONFIRMATION_RULE = "Show the connected preview, editable review link, bone hierarchy, joints, attachment placement, and draw order. Ask whether the user approves the rig shown, including any edits they save in that linked editor before replying; then end your turn. While awaiting a reply, do not build, poll, sleep, or keep the turn active. A new user message approving after the last save authorizes spine_build_rig_from_landmarks with spine_preview_rig's reviewId. Valid editor saves keep that reviewId current if the source PNGs are unchanged. Changes outside the editor or after approval require a new preview and approval. A draft, tool result, or elapsed time is not approval.";
 export const RIG_READY_NEXT_ACTION = `Call spine_preview_rig and inspect the setup and bend snapshots. ${RIG_CONFIRMATION_RULE}`;
 export const RIG_INCOMPLETE_NEXT_ACTION = `Use the returned manifest and sourceHash. ${RIG_ASSEMBLY_RULE} Resolve all connection and build errors. ${RIG_READY_NEXT_ACTION}`;
 
 export const SERVER_INSTRUCTIONS = [
   "Read spine-docs://reference/start-here; use spine_search_reference for task guides, spine_workflow_guide({goal:'choose'}) for workflows, and spine_capabilities for tools.",
-  "For separate-image rigs, connect and preview the full draft; show it, ask approval, then end your turn. While awaiting approval, do not build, poll, or sleep. Build only after a new user message explicitly approves that unchanged preview.",
+  "For separate-image rigs, connect and preview the full draft; show it, ask approval, then end your turn. While awaiting approval, do not build, poll, or sleep. The user may edit and save in the linked browser editor; build the last saved rig only after a new user message approves it. Other changes require a new preview.",
   "For JSON edits, review the staged edit's diagnostics and net diff; revise with spine_preview_edit and baseEditId if needed, then commit the chosen editId.",
   "Use spine_finalize_animation for native final delivery.",
   CLEANUP_GUIDANCE,
@@ -37,7 +37,7 @@ const WORKFLOWS = {
     steps: ["spine_start_rig_review inventories PNGs and opens the local editor; starter parts may be unconnected.",
       "Use its manifest and sourceHash. The editor autosaves and supports Undo/Redo; individual landmarks and draw order need no separate confirmation.",
       RIG_ASSEMBLY_RULE,
-      "Reload the editor URL after saving; resolve all validation errors.",
+      "Reload the editor URL after MCP draft saves; resolve all validation errors. Browser edits must show Saved before chat approval.",
       RIG_READY_NEXT_ACTION],
   },
   round_trip: {

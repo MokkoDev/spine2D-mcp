@@ -4,9 +4,9 @@
 
 `spine_start_rig_review` opens the browser editor and returns a starter manifest and `sourceHash`; starter parts may be unconnected in a tray. Give each nonroot part a parent landmark, place art and joints, set draw order, and call `spine_save_rig_draft` with the full manifest and `sourceHash`. Reload the editor URL, resolve `spine_validate_rig_manifest` errors, then inspect `spine_preview_rig` setup and bend snapshots.
 
-Show the assembled character, editable review link, bone hierarchy, joints, attachment placement, and draw order. Ask approval of this exact rig, then **end the turn**. Do not call another tool, poll, sleep, or wait in the same turn. A draft, tool result, or elapsed time is not approval.
+Show the assembled character, editable review link, bone hierarchy, joints, attachment placement, and draw order. Ask approval of the shown rig, including any changes the user saves in that linked editor before replying, then **end the turn**. Do not call another tool, poll, sleep, or wait in the same turn. A draft, tool result, or elapsed time is not approval.
 
-Only after a **new user message** explicitly approves the unchanged rig, call `spine_build_rig_from_landmarks` with `spine_preview_rig`'s `reviewId`. The server checks the manifest and PNGs against the preview but cannot read chat approval; honor the reply. If the user requests changes or any input changes, revise and preview again. Tool inputs: [FUNCTIONS.md](../../FUNCTIONS.md).
+The user may adjust the rig in the browser editor after this prompt. Once it shows **Saved** and no build errors, their **new approval message** covers that saved version. Call `spine_build_rig_from_landmarks` with the original `reviewId`; valid saves from the linked editor update its revision while source PNGs remain unchanged. The server cannot read chat approval, so honor the reply. Changes outside that editor, changed PNGs, or edits after approval require another preview and approval. Tool inputs: [FUNCTIONS.md](../../FUNCTIONS.md).
 
 ## Create a skeleton directly
 

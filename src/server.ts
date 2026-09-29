@@ -25,7 +25,7 @@ import { applyPoseOperations, capturePose, type SavedPose } from "./spine/full-p
 import { applyMeshPoseOperations, captureMeshPose, type SavedMeshPose } from "./spine/mesh-pose.js";
 import { buildMotionOperations } from "./spine/motion.js";
 import { createPlayerPreview } from "./spine/player.js";
-import { buildRigFromLandmarks, readRigManifest, validateRigManifest } from "./spine/landmark-rig.js";
+import { buildRigFromLandmarks, readRigManifest, validateRigManifest, type RigManifest } from "./spine/landmark-rig.js";
 import { saveRigDraft, startRigReview } from "./spine/rig-review.js";
 import { analyzeRigContacts, suggestGaitContacts } from "./spine/rig-contact.js";
 import { previewRig } from "./spine/rig-preview.js";
@@ -42,6 +42,10 @@ import { REFERENCE_PAGES, readReferencePage, referenceUri, searchReference } fro
 
 function jsonResult(value: Record<string, unknown>) {
   return { content: [], structuredContent: value };
+}
+
+function rigImageKey(manifest: RigManifest) {
+  return JSON.stringify(manifest.parts.map(({ id, image, sha256 }) => [id, image, sha256]).sort(([a], [b]) => a.localeCompare(b)));
 }
 
 function compactStage(value: Record<string, unknown>): Record<string, unknown> {
@@ -92,7 +96,7 @@ export function createServer(): McpServer {
   const meshPoses = new Map<string, SavedMeshPose>();
   const players = new Map<string, string>();
   const reviews = new Map<string, Record<string, unknown>>();
-  const rigReviews = new Map<string, { manifestPath: string; fingerprint: string }>();
+  const rigReviews = new Map<string, { manifestPath: string; fingerprint: string; imageKey: string; editorToken?: string }>();
   const rigReviewUrls = new Map<string, string>();
   const reviewedRigs = new Set<string>();
 
@@ -527,7 +531,16 @@ export function createServer(): McpServer {
     { description: `Inventory PNG parts, return a starter manifest and sourceHash, and open the two-view rig editor. ${RIG_ASSEMBLY_RULE}`,
       inputSchema: z.object({ imagesDir: z.string().min(1), manifestPath: z.string().min(1).optional(), outputDir: z.string().min(1), editorVersion: z.enum(["4.2", "4.3"]) }) },
     async (input) => runTool(async () => {
-      const started = await startRigReview(input);
+      const started = await startRigReview(input, async ({ manifestPath, token, draft, valid }) => {
+        if (!valid) return;
+        const imageKey = rigImageKey(draft);
+        const matching = [...rigReviews.values()].filter((review) => review.manifestPath === manifestPath
+          && review.editorToken === token && review.imageKey === imageKey);
+        if (!matching.length || JSON.stringify(await readRigManifest(manifestPath)) !== JSON.stringify(draft)) return;
+        const fingerprint = await rigReviewFingerprint(manifestPath);
+        if (JSON.stringify(await readRigManifest(manifestPath)) !== JSON.stringify(draft)) return;
+        for (const review of matching) review.fingerprint = fingerprint;
+      });
       rigReviewUrls.set(resolve(started.manifestPath), started.url);
       return started;
     }),
@@ -564,7 +577,7 @@ export function createServer(): McpServer {
 
   server.registerTool(
     TOOL_NAMES.buildRigFromLandmarks,
-    { description: "Build an unchanged PNG rig preview into new Spine JSON and optionally a native .spine project without overwriting outputs. Requires explicit approval of that preview in a new user message; follow spine_preview_rig's nextAction and pass its reviewId.",
+    { description: "Build a reviewed PNG rig into new Spine JSON and optionally a native .spine project without overwriting outputs. Saved edits in the linked review editor are included when the user approves afterward; other changes require a new preview. Pass spine_preview_rig's reviewId.",
       inputSchema: z.object({ manifestPath: z.string().min(1), reviewId: z.uuid(), outputDataPath: z.string().min(1),
         outputProjectPath: z.string().min(1).optional(), editorVersion: z.enum(["4.2", "4.3"]) }) },
     async ({ reviewId, ...input }) => runTool(async () => {
@@ -572,7 +585,7 @@ export function createServer(): McpServer {
       if (!review || review.manifestPath !== resolve(input.manifestPath))
         throw new SpineError("RIG_REVIEW_REQUIRED", "Preview the assembled rig before building it.");
       if (await rigReviewFingerprint(review.manifestPath) !== review.fingerprint)
-        throw new SpineError("RIG_REVIEW_STALE", "The rig draft or a source image changed after preview. Preview it again and ask the user to approve the updated rig.");
+        throw new SpineError("RIG_REVIEW_STALE", "The rig draft changed outside its review editor, or a source image changed. Preview the current rig and ask the user to approve it.");
       const result = await buildRigFromLandmarks(input);
       reviewedRigs.add(await rigArtifactFingerprint(await readDocument(result.outputDataPath)));
       return result;
@@ -591,7 +604,9 @@ export function createServer(): McpServer {
         throw new SpineError("RIG_INPUT_CHANGED", "The rig draft or an image changed during preview. Preview it again.");
       const reviewId = randomUUID();
       const reviewUrl = rigReviewUrls.get(path);
-      rigReviews.set(reviewId, { manifestPath: path, fingerprint: before });
+      rigReviews.set(reviewId, { manifestPath: path, fingerprint: before,
+        imageKey: rigImageKey(await readRigManifest(path)),
+        ...(reviewUrl ? { editorToken: new URL(reviewUrl).searchParams.get("token") ?? undefined } : {}) });
       if (rigReviews.size > 20) rigReviews.delete(rigReviews.keys().next().value!);
       return { ...result, reviewId, reviewStatus: "awaiting_user_confirmation", ...(reviewUrl ? { reviewUrl } : {}),
         nextAction: RIG_CONFIRMATION_RULE };
