@@ -12,12 +12,10 @@ function result(response) {
   return response.structuredContent;
 }
 
-test("approved two-image rig builds and finalizes a native Spine project", { timeout: 180_000 }, async () => {
+test("reviewed two-image rig builds and finalizes a native Spine project", { timeout: 180_000 }, async () => {
   assert.ok(process.env.SPINE_CLI_PATH, "Set SPINE_CLI_PATH for CLI tests.");
   const folder = await mkdtemp(join(tmpdir(), "spine-rig-approval-cli-"));
-  const client = new Client({ name: "rig-approval-cli-test", version: "0.1.0" }, { capabilities: { elicitation: { form: {} } } });
-  let prompts = 0;
-  client.setRequestHandler("elicitation/create", async () => { prompts++; return { action: "accept", content: { approved: true } }; });
+  const client = new Client({ name: "rig-approval-cli-test", version: "0.1.0" });
   const transport = new StdioClientTransport({ command: new URL("../startup.sh", import.meta.url).pathname,
     env: { ...process.env, SPINE_MCP_STATE_DIR: join(folder, "state") } });
   try {
@@ -42,8 +40,6 @@ test("approved two-image rig builds and finalizes a native Spine project", { tim
     const preview = result(await client.callTool({ name: "spine_preview_rig", arguments: {
       manifestPath: started.manifestPath, outputDir: join(folder, "previews"),
     } }));
-    result(await client.callTool({ name: "spine_confirm_rig_review", arguments: { reviewId: preview.reviewId } }));
-    assert.equal(prompts, 1);
     const dataPath = join(folder, "rig.json"), projectPath = join(folder, "rig.spine");
     const built = result(await client.callTool({ name: "spine_build_rig_from_landmarks", arguments: {
       manifestPath: started.manifestPath, reviewId: preview.reviewId,

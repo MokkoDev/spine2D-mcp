@@ -42,10 +42,7 @@ test("MCP rig draft accepts numeric values and numeric strings but rejects empty
 });
 test("MCP rig workflow starts review, previews a draft, validates saved joints, and builds JSON",{timeout:30_000},async()=>{
   const folder=await mkdtemp(join(tmpdir(),"spine-rig-mcp-"));
-  const client=new Client({name:"rig-review-test",version:"0.1.0"},{capabilities:{elicitation:{form:{}}}});
-  let approvalRequests=0;
-  let shouldApprove=false;
-  client.setRequestHandler("elicitation/create",async request=>{approvalRequests++;assert.match(request.params.message,/Approve this complete Spine rig/);return {action:"accept",content:{approved:shouldApprove}}});
+  const client=new Client({name:"rig-review-test",version:"0.1.0"});
   const transport=new StdioClientTransport({command:new URL("../startup.sh",import.meta.url).pathname});
   try {
     const images=join(folder,"images");await mkdir(images);const png=new PNG({width:24,height:40});
@@ -54,7 +51,9 @@ test("MCP rig workflow starts review, previews a draft, validates saved joints, 
     await client.connect(transport);
     const menu=result(await client.callTool({name:"spine_workflow_guide",arguments:{goal:"rig_review"}}));
     assert.ok(menu.primaryTools.includes("spine_start_rig_review"));
+    assert.ok(!menu.primaryTools.includes("spine_confirm_rig_review"));
     assert.ok(menu.steps.some(step=>step.includes("end your turn")&&step.includes("new user message")));
+    assert.ok(!(await client.listTools()).tools.some(tool=>tool.name==="spine_confirm_rig_review"));
     const started=result(await client.callTool({name:"spine_start_rig_review",arguments:{imagesDir:images,outputDir:join(folder,"review"),editorVersion:"4.2"}}));
     assert.match(started.url,/^http:\/\/127\.0\.0\.1:/);
     const draft=result(await client.callTool({name:"spine_validate_rig_manifest",arguments:{manifestPath:started.manifestPath}}));
@@ -64,26 +63,18 @@ test("MCP rig workflow starts review, previews a draft, validates saved joints, 
     assert.match(preview.reviewId,/^[0-9a-f-]{36}$/);
     assert.equal(preview.reviewStatus,"awaiting_user_confirmation");
     assert.match(preview.nextAction,/end your turn/);
-    assert.match(preview.nextAction,/Do not call spine_confirm_rig_review/);
-    assert.equal(approvalRequests,0);
+    assert.match(preview.nextAction,/Do not build, poll, sleep/);
     const m=JSON.parse(await readFile(started.manifestPath,"utf8"));m.parts[0].setupRotationDeg=5;
     const page=await (await fetch(started.url)).text();assert.match(page,/Part view/);
     const token=new URL(started.url).searchParams.get("token"),hash=(await import("node:crypto")).createHash("sha256").update(JSON.stringify(JSON.parse(await readFile(started.manifestPath,"utf8")))).digest("hex");
     const saved=await fetch(new URL(started.url).origin+"/manifest?token="+token,{method:"POST",headers:{"If-Match":hash},body:JSON.stringify(m)});assert.equal(saved.status,200);
     const checked=result(await client.callTool({name:"spine_validate_rig_manifest",arguments:{manifestPath:started.manifestPath}}));assert.equal(checked.valid,true,JSON.stringify(checked.errors));
-    const stale=await client.callTool({name:"spine_confirm_rig_review",arguments:{reviewId:preview.reviewId}});
-    assert.equal(stale.isError,true);assert.equal(stale.structuredContent.code,"RIG_REVIEW_STALE");assert.equal(approvalRequests,0);
-    const reviewed=result(await client.callTool({name:"spine_preview_rig",arguments:{manifestPath:started.manifestPath,outputDir:join(folder,"previews")}}));
     const out=join(folder,"body.json");
-    const unapproved=await client.callTool({name:"spine_build_rig_from_landmarks",arguments:{manifestPath:started.manifestPath,reviewId:reviewed.reviewId,outputDataPath:out,editorVersion:"4.2"}});
-    assert.equal(unapproved.isError,true);assert.equal(unapproved.structuredContent.code,"RIG_CONFIRMATION_REQUIRED");
+    const stale=await client.callTool({name:"spine_build_rig_from_landmarks",arguments:{manifestPath:started.manifestPath,reviewId:preview.reviewId,outputDataPath:out,editorVersion:"4.2"}});
+    assert.equal(stale.isError,true);assert.equal(stale.structuredContent.code,"RIG_REVIEW_STALE");
+    const reviewed=result(await client.callTool({name:"spine_preview_rig",arguments:{manifestPath:started.manifestPath,outputDir:join(folder,"previews")}}));
     const browserBuild=await fetch(new URL(started.url).origin+"/build?token="+token,{method:"POST"});
     assert.equal(browserBuild.status,403);
-    const declined=await client.callTool({name:"spine_confirm_rig_review",arguments:{reviewId:reviewed.reviewId}});
-    assert.equal(declined.isError,true);assert.equal(declined.structuredContent.code,"RIG_CONFIRMATION_DECLINED");
-    shouldApprove=true;
-    const confirmed=result(await client.callTool({name:"spine_confirm_rig_review",arguments:{reviewId:reviewed.reviewId}}));
-    assert.equal(confirmed.approved,true);assert.equal(approvalRequests,2);
     const built=result(await client.callTool({name:"spine_build_rig_from_landmarks",arguments:{manifestPath:started.manifestPath,reviewId:reviewed.reviewId,outputDataPath:out,editorVersion:"4.2"}}));
     assert.equal(built.outputDataPath,out);assert.equal(JSON.parse(await readFile(out,"utf8")).slots.length,1);
     const duplicate=await client.callTool({name:"spine_build_rig_from_landmarks",arguments:{manifestPath:started.manifestPath,reviewId:reviewed.reviewId,outputDataPath:out,editorVersion:"4.2"}});
@@ -94,7 +85,7 @@ test("MCP rig workflow starts review, previews a draft, validates saved joints, 
   } finally {await client.close().catch(()=>undefined);await rm(folder,{recursive:true,force:true})}
 });
 
-test("direct JSON rig commits and imports cannot bypass confirmation",{timeout:30_000},async()=>{
+test("direct JSON rig commits and imports cannot bypass a reviewed build",{timeout:30_000},async()=>{
   const folder=await mkdtemp(join(tmpdir(),"spine-rig-bypass-"));
   const client=new Client({name:"rig-bypass-test",version:"0.1.0"});
   const transport=new StdioClientTransport({command:new URL("../startup.sh",import.meta.url).pathname});
@@ -123,30 +114,9 @@ test("direct JSON rig commits and imports cannot bypass confirmation",{timeout:3
   } finally {await client.close().catch(()=>undefined);await rm(folder,{recursive:true,force:true})}
 });
 
-test("rig review stays unapproved when the MCP client cannot prompt the user",{timeout:30_000},async()=>{
-  const folder=await mkdtemp(join(tmpdir(),"spine-rig-no-elicit-"));
-  const client=new Client({name:"rig-no-elicit-test",version:"0.1.0"});
-  const transport=new StdioClientTransport({command:new URL("../startup.sh",import.meta.url).pathname});
-  try {
-    const images=join(folder,"images");await mkdir(images);
-    const png=new PNG({width:16,height:16});
-    for(let y=2;y<14;y++)for(let x=2;x<14;x++)png.data.set([30,100,200,255],(y*16+x)*4);
-    await writeFile(join(images,"body.png"),PNG.sync.write(png));
-    await client.connect(transport);
-    const started=result(await client.callTool({name:"spine_start_rig_review",arguments:{imagesDir:images,outputDir:join(folder,"review"),editorVersion:"4.2"}}));
-    const preview=result(await client.callTool({name:"spine_preview_rig",arguments:{manifestPath:started.manifestPath,outputDir:join(folder,"previews")}}));
-    const confirmation=await client.callTool({name:"spine_confirm_rig_review",arguments:{reviewId:preview.reviewId}});
-    assert.notEqual(confirmation.structuredContent?.approved,true);
-    const built=await client.callTool({name:"spine_build_rig_from_landmarks",arguments:{manifestPath:started.manifestPath,reviewId:preview.reviewId,outputDataPath:join(folder,"body.json"),editorVersion:"4.2"}});
-    assert.equal(built.isError,true);
-    assert.equal(built.structuredContent.code,"RIG_CONFIRMATION_REQUIRED");
-  } finally {await client.close().catch(()=>undefined);await rm(folder,{recursive:true,force:true})}
-});
-
-test("approved multi-part rig permits motion but invalidates on rig or image changes",{timeout:30_000},async()=>{
+test("review-built multi-part rig permits motion but invalidates on rig or image changes",{timeout:30_000},async()=>{
   const folder=await mkdtemp(join(tmpdir(),"spine-rig-approved-"));
-  const client=new Client({name:"rig-approved-test",version:"0.1.0"},{capabilities:{elicitation:{form:{}}}});
-  client.setRequestHandler("elicitation/create",async()=>({action:"accept",content:{approved:true}}));
+  const client=new Client({name:"rig-approved-test",version:"0.1.0"});
   const transport=new StdioClientTransport({command:new URL("../startup.sh",import.meta.url).pathname});
   try {
     const images=join(folder,"images");await mkdir(images);
@@ -159,7 +129,6 @@ test("approved multi-part rig permits motion but invalidates on rig or image cha
     draft.root={part:"body",landmark:body.pivot,world:[0,40]};body.parent=null;head.parent={part:"body",landmark:body.tip};draft.drawOrder=["body","head"];
     result(await client.callTool({name:"spine_save_rig_draft",arguments:{manifestPath:started.manifestPath,sourceHash:started.sourceHash,draft}}));
     const preview=result(await client.callTool({name:"spine_preview_rig",arguments:{manifestPath:started.manifestPath,outputDir:join(folder,"previews")}}));
-    result(await client.callTool({name:"spine_confirm_rig_review",arguments:{reviewId:preview.reviewId}}));
     const path=join(folder,"approved.json");
     result(await client.callTool({name:"spine_build_rig_from_landmarks",arguments:{manifestPath:started.manifestPath,reviewId:preview.reviewId,outputDataPath:path,editorVersion:"4.2"}}));
     const motion=result(await client.callTool({name:"spine_preview_edit",arguments:{path,operations:[

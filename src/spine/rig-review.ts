@@ -178,7 +178,7 @@ export async function startRigReview(input: { imagesDir: string; manifestPath?: 
       return;
     }
     if (request.method === "POST" && url.pathname === "/build") {
-      json(403, { code: "RIG_CONFIRMATION_REQUIRED", message: "Preview and confirm the rig through the MCP client before building." });
+      json(403, { code: "RIG_BUILD_REQUIRES_MCP", message: "Ask for approval in chat after preview, then build the rig through the MCP tool." });
       return;
     }
     json(404, { message: "Unknown route." });

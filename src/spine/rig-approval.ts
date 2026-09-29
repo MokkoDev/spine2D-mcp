@@ -57,11 +57,11 @@ export async function rigArtifactFingerprint(document: SpineDocument): Promise<s
   return createHash("sha256").update(JSON.stringify({ rig: rigSignature(document), imagesDir, images })).digest("hex");
 }
 
-export async function requireApprovedRig(document: SpineDocument, approved: ReadonlySet<string>): Promise<void> {
+export async function requireReviewedRig(document: SpineDocument, reviewed: ReadonlySet<string>): Promise<void> {
   if (attachmentCount(document) < 2) return;
-  if (approved.size && approved.has(await rigArtifactFingerprint(document).catch(() => ""))) return;
+  if (reviewed.size && reviewed.has(await rigArtifactFingerprint(document).catch(() => ""))) return;
   throw new SpineError("RIG_REVIEW_REQUIRED",
-    "This multi-part rig has no user-approved review in this server session. Assemble and preview it with the rig review tools, request user confirmation, then build it.",
+    "This multi-part rig has no matching reviewed build in this server session. Assemble and preview it, obtain the user's approval in chat, then build it with the preview reviewId.",
     { path: document.path, attachmentCount: attachmentCount(document) });
 }
 

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 
-import { acceptedContent, inputRequired, isInputRequiredResult, McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 
 import {
@@ -25,11 +25,11 @@ import { applyPoseOperations, capturePose, type SavedPose } from "./spine/full-p
 import { applyMeshPoseOperations, captureMeshPose, type SavedMeshPose } from "./spine/mesh-pose.js";
 import { buildMotionOperations } from "./spine/motion.js";
 import { createPlayerPreview } from "./spine/player.js";
-import { buildRigFromLandmarks, calculateRigPlacements, readRigManifest, validateRigManifest } from "./spine/landmark-rig.js";
+import { buildRigFromLandmarks, readRigManifest, validateRigManifest } from "./spine/landmark-rig.js";
 import { saveRigDraft, startRigReview } from "./spine/rig-review.js";
 import { analyzeRigContacts, suggestGaitContacts } from "./spine/rig-contact.js";
 import { previewRig } from "./spine/rig-preview.js";
-import { attachmentCount, requireApprovedRig, rigArtifactFingerprint, rigReviewFingerprint, rigSignature } from "./spine/rig-approval.js";
+import { attachmentCount, requireReviewedRig, rigArtifactFingerprint, rigReviewFingerprint, rigSignature } from "./spine/rig-approval.js";
 import { roundTripEdit } from "./spine/roundtrip.js";
 import { inspectAnimation, inspectProject, projectEntries, referenceGraph, searchProject } from "./spine/inspect.js";
 import { captureBonePose, poseApplyOperations, type SavedBonePose } from "./spine/pose.js";
@@ -60,9 +60,7 @@ function compactStage(value: Record<string, unknown>): Record<string, unknown> {
 
 async function runTool(action: () => Promise<Record<string, unknown>>) {
   try {
-    const result = await action();
-    if (isInputRequiredResult(result)) return result;
-    return jsonResult(compactStage(result));
+    return jsonResult(compactStage(await action()));
   } catch (error) {
     const issue = error instanceof SpineError
       ? error
@@ -94,10 +92,9 @@ export function createServer(): McpServer {
   const meshPoses = new Map<string, SavedMeshPose>();
   const players = new Map<string, string>();
   const reviews = new Map<string, Record<string, unknown>>();
-  const rigReviews = new Map<string, { manifestPath: string; fingerprint: string; previewDir: string;
-    setupPath: string; reviewUrl?: string; approved: boolean; pendingNonce?: string }>();
+  const rigReviews = new Map<string, { manifestPath: string; fingerprint: string }>();
   const rigReviewUrls = new Map<string, string>();
-  const approvedRigs = new Set<string>();
+  const reviewedRigs = new Set<string>();
 
   function publishReview(review: Record<string, unknown>): string {
     const reviewId = randomUUID();
@@ -566,48 +563,18 @@ export function createServer(): McpServer {
   );
 
   server.registerTool(
-    TOOL_NAMES.confirmRigReview,
-    { description: "Call only after a new user message explicitly approves the previously rendered rig preview. The MCP client then requests user confirmation. Decline and unsupported clients leave the rig unapproved.",
-      inputSchema: z.object({ reviewId: z.uuid() }) },
-    async ({ reviewId }, ctx) => runTool(async () => {
-      const review = rigReviews.get(reviewId);
-      if (!review) throw new SpineError("RIG_REVIEW_NOT_FOUND", "Preview the assembled rig before requesting confirmation.");
-      if (await rigReviewFingerprint(review.manifestPath) !== review.fingerprint)
-        throw new SpineError("RIG_REVIEW_STALE", "The rig draft or a source image changed after preview. Preview it again before requesting confirmation.");
-      if (review.approved) return { reviewId, manifestPath: review.manifestPath, approved: true };
-      if (ctx.mcpReq.inputResponses?.approveRig !== undefined) {
-        if (!review.pendingNonce || ctx.mcpReq.requestState<string>() !== review.pendingNonce)
-          throw new SpineError("RIG_CONFIRMATION_REQUIRED", "The confirmation response did not match a pending user review request.");
-        review.pendingNonce = undefined;
-        const response = acceptedContent(ctx.mcpReq.inputResponses, "approveRig") as Record<string, unknown> | undefined;
-        if (response?.approved !== true) throw new SpineError("RIG_CONFIRMATION_DECLINED", "The user did not approve this rig.");
-        review.approved = true;
-        return { reviewId, manifestPath: review.manifestPath, approved: true };
-      }
-      const manifest = await readRigManifest(review.manifestPath);
-      const hierarchy = manifest.parts.map((part) => `${part.id} → ${part.parent ? `${part.parent.part}.${part.parent.landmark}` : "root"} (${part.pivot} to ${part.tip})`).join("; ");
-      const placed = calculateRigPlacements(manifest);
-      const art = manifest.parts.map((part) => `${part.id} center (${placed[part.id].center.map((value) => value.toFixed(1)).join(", ")})`).join("; ");
-      const message = `Approve this complete Spine rig? Inspect the setup and bend snapshots before accepting. Setup: ${review.setupPath}. Bend snapshots: ${review.previewDir}. Editable review: ${review.reviewUrl ?? review.manifestPath}. Hierarchy and joints: ${hierarchy}. Attachment placement: ${art}. Draw order, back to front: ${manifest.drawOrder.join(", ")}.`;
-      review.pendingNonce = randomUUID();
-      return inputRequired({ requestState: review.pendingNonce, inputRequests: { approveRig: inputRequired.elicit({ message,
-        requestedSchema: { type: "object", properties: { approved: { type: "boolean", title: "Approve this exact rig" } }, required: ["approved"] } }) } }) as unknown as Record<string, unknown>;
-    }),
-  );
-
-  server.registerTool(
     TOOL_NAMES.buildRigFromLandmarks,
-    { description: `Compile a reviewed PNG landmark rig into new Spine JSON and optionally import a native .spine project without overwriting outputs. ${RIG_CONFIRMATION_RULE}`,
+    { description: `Call after the user explicitly approves the exact preview in a new chat message. Compile that unchanged PNG landmark rig into new Spine JSON and optionally import a native .spine project without overwriting outputs. ${RIG_CONFIRMATION_RULE}`,
       inputSchema: z.object({ manifestPath: z.string().min(1), reviewId: z.uuid(), outputDataPath: z.string().min(1),
         outputProjectPath: z.string().min(1).optional(), editorVersion: z.enum(["4.2", "4.3"]) }) },
     async ({ reviewId, ...input }) => runTool(async () => {
       const review = rigReviews.get(reviewId);
-      if (!review || !review.approved || review.manifestPath !== resolve(input.manifestPath))
-        throw new SpineError("RIG_CONFIRMATION_REQUIRED", "Preview the assembled rig and obtain user confirmation before building it.");
+      if (!review || review.manifestPath !== resolve(input.manifestPath))
+        throw new SpineError("RIG_REVIEW_REQUIRED", "Preview the assembled rig before building it.");
       if (await rigReviewFingerprint(review.manifestPath) !== review.fingerprint)
-        throw new SpineError("RIG_REVIEW_STALE", "The rig draft or a source image changed after confirmation. Preview and confirm it again.");
+        throw new SpineError("RIG_REVIEW_STALE", "The rig draft or a source image changed after preview. Preview it again and ask the user to approve the updated rig.");
       const result = await buildRigFromLandmarks(input);
-      approvedRigs.add(await rigArtifactFingerprint(await readDocument(result.outputDataPath)));
+      reviewedRigs.add(await rigArtifactFingerprint(await readDocument(result.outputDataPath)));
       return result;
     }),
   );
@@ -624,8 +591,7 @@ export function createServer(): McpServer {
         throw new SpineError("RIG_INPUT_CHANGED", "The rig draft or an image changed during preview. Preview it again.");
       const reviewId = randomUUID();
       const reviewUrl = rigReviewUrls.get(path);
-      rigReviews.set(reviewId, { manifestPath: path, fingerprint: before, previewDir: result.previewDir,
-        setupPath: result.snapshots[0].path, reviewUrl, approved: false });
+      rigReviews.set(reviewId, { manifestPath: path, fingerprint: before });
       if (rigReviews.size > 20) rigReviews.delete(rigReviews.keys().next().value!);
       return { ...result, reviewId, reviewStatus: "awaiting_user_confirmation", ...(reviewUrl ? { reviewUrl } : {}),
         nextAction: RIG_CONFIRMATION_RULE };
@@ -727,7 +693,7 @@ export function createServer(): McpServer {
       inputSchema: z.object({ dataPath: z.string().min(1), outputProjectPath: z.string().min(1), editorVersion: z.string().min(1), skeletonName: z.string().min(1).optional(), timeoutMs: z.number().int().min(1_000).max(600_000).optional() }),
     },
     async ({ dataPath, outputProjectPath, editorVersion, skeletonName, timeoutMs }) => runTool(async () => {
-      await requireApprovedRig(await readDocument(dataPath), approvedRigs);
+      await requireReviewedRig(await readDocument(dataPath), reviewedRigs);
       const result = await importData(dataPath, outputProjectPath, skeletonName, editorVersion, timeoutMs);
       return { dataPath: result.dataPath, outputProjectPath: result.outputProjectPath, sourceHash: result.sourceHash, cli: { executable: result.cli.executable, exitCode: result.cli.exitCode, stdout: result.cli.stdout.slice(0, 4000), stderr: result.cli.stderr.slice(0, 4000) } };
     }),
@@ -1210,7 +1176,7 @@ export function createServer(): McpServer {
         timeoutMs: z.number().int().min(1_000).max(600_000).optional() }),
     },
     async (input) => runTool(async () => {
-      await requireApprovedRig(await readDocument(input.dataPath), approvedRigs);
+      await requireReviewedRig(await readDocument(input.dataPath), reviewedRigs);
       const result = await finalizeAnimation(input);
       const framePreview = publishPreview(result.rendered, { kind: "derived",
         sourcePath: result.manifest.reexported.path, sourceHash: result.manifest.reexported.sha256,
@@ -1781,7 +1747,7 @@ export function createServer(): McpServer {
       const before = parseDocument(staged.sourcePath, staged.beforeText);
       const after = parseDocument(staged.sourcePath, staged.afterText);
       if (attachmentCount(after) >= 2 && rigSignature(before) !== rigSignature(after))
-        await requireApprovedRig(after, approvedRigs);
+        await requireReviewedRig(after, reviewedRigs);
       return { ...(await edits.commit(editId)) };
     }),
   );
