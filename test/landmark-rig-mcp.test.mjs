@@ -8,6 +8,38 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { PNG } from "pngjs";
 
 function result(response){assert.equal(response.isError,undefined,response.content?.[0]?.text);return response.structuredContent}
+test("MCP rig draft accepts numeric values and numeric strings but rejects empty strings",{timeout:30_000},async()=>{
+  const folder=await mkdtemp(join(tmpdir(),"spine-rig-numeric-"));
+  const client=new Client({name:"rig-numeric-test",version:"0.1.0"});
+  const transport=new StdioClientTransport({command:new URL("../startup.sh",import.meta.url).pathname});
+  try {
+    const images=join(folder,"images");await mkdir(images);
+    const png=new PNG({width:16,height:16});
+    for(let y=2;y<14;y++)for(let x=2;x<14;x++)png.data.set([30,100,200,255],(y*16+x)*4);
+    await writeFile(join(images,"body.png"),PNG.sync.write(png));
+    await client.connect(transport);
+    const started=result(await client.callTool({name:"spine_start_rig_review",arguments:{imagesDir:images,outputDir:join(folder,"review"),editorVersion:"4.2"}}));
+    const draft=structuredClone(started.manifest);
+    draft.schemaVersion="1";
+    draft.root.world=draft.root.world.map(String);
+    for(const part of draft.parts){
+      part.width=String(part.width);part.height=String(part.height);part.setupRotationDeg=String(part.setupRotationDeg);
+      for(const name of Object.keys(part.landmarks))part.landmarks[name]=part.landmarks[name].map(String);
+    }
+    const bad=structuredClone(draft);bad.parts[0].width="";
+    const rejected=await client.callTool({name:"spine_save_rig_draft",arguments:{manifestPath:started.manifestPath,sourceHash:started.sourceHash,draft:bad}});
+    assert.equal(rejected.isError,true);
+    const saved=result(await client.callTool({name:"spine_save_rig_draft",arguments:{manifestPath:started.manifestPath,sourceHash:started.sourceHash,draft}}));
+    assert.ok(saved.sourceHash);
+    const manifest=JSON.parse(await readFile(started.manifestPath,"utf8"));
+    assert.equal(manifest.schemaVersion,1);
+    assert.equal(typeof manifest.root.world[0],"number");
+    assert.equal(typeof manifest.parts[0].width,"number");
+    assert.equal(typeof manifest.parts[0].setupRotationDeg,"number");
+    assert.equal(typeof manifest.parts[0].landmarks.pivot[0],"number");
+    result(await client.callTool({name:"spine_save_rig_draft",arguments:{manifestPath:started.manifestPath,sourceHash:saved.sourceHash,draft:manifest}}));
+  } finally {await client.close().catch(()=>undefined);await rm(folder,{recursive:true,force:true})}
+});
 test("MCP rig workflow starts review, previews a draft, validates saved joints, and builds JSON",{timeout:30_000},async()=>{
   const folder=await mkdtemp(join(tmpdir(),"spine-rig-mcp-"));
   const client=new Client({name:"rig-review-test",version:"0.1.0"},{capabilities:{elicitation:{form:{}}}});

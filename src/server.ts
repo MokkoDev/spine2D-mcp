@@ -536,16 +536,20 @@ export function createServer(): McpServer {
     }),
   );
 
-  const rigPoint = z.tuple([z.number().finite(), z.number().finite()]);
+  const rigNumber = z.union([
+    z.number().finite(),
+    z.string().regex(/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/).transform(Number),
+  ]).pipe(z.number().finite());
+  const rigPoint = z.tuple([rigNumber, rigNumber]);
   server.registerTool(
     TOOL_NAMES.saveRigDraft,
     { description: "Save a connected PNG assembly draft using the manifest and sourceHash returned by spine_start_rig_review. Invalid or stale drafts are rejected.",
       inputSchema: z.object({ manifestPath: z.string().min(1), sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
-        draft: z.object({ schemaVersion: z.literal(1), spineVersion: z.enum(["4.2", "4.3"]), imagesDir: z.string(),
+        draft: z.object({ schemaVersion: z.union([z.literal(1), z.literal("1").transform(() => 1 as const)]), spineVersion: z.enum(["4.2", "4.3"]), imagesDir: z.string(),
           root: z.object({ part: z.string(), landmark: z.string(), world: rigPoint }),
-          parts: z.array(z.object({ id: z.string(), image: z.string(), width: z.number(), height: z.number(), sha256: z.string(),
+          parts: z.array(z.object({ id: z.string(), image: z.string(), width: rigNumber, height: rigNumber, sha256: z.string(),
             parent: z.object({ part: z.string(), landmark: z.string() }).nullable(), pivot: z.string(), tip: z.string(),
-            landmarks: z.record(z.string(), rigPoint), setupRotationDeg: z.number().finite() })),
+            landmarks: z.record(z.string(), rigPoint), setupRotationDeg: rigNumber })),
           drawOrder: z.array(z.string()) }) }) },
     async (input) => runTool(async () => saveRigDraft(input)),
   );
