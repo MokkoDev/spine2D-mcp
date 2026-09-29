@@ -227,21 +227,21 @@ export function createServer(): McpServer {
 
   server.registerTool(
     TOOL_NAMES.workflowGuide,
-    { description: "Start here when a Spine task could use several tools. Choose by source and outcome; get the recommended entry tools and steps.",
+    { description: "Choose a workflow by source and outcome; return entry tools and steps.",
       inputSchema: z.object({ goal: z.enum(["choose", "inspect", "create_project", "rig_review", "round_trip", "final_delivery", "new_motion", "edit_json", "reuse_pose", "review_motion", "batch_export"]).optional() }) },
     async ({ goal }) => runTool(async () => workflowGuide(goal)),
   );
 
   server.registerTool(
     TOOL_NAMES.searchReference,
-    { description: "Search Spine task guides by words or tool names. Returns short matches, slugs, and resource URIs; fetch one page with spine_get_reference or MCP resources/read.",
+    { description: "Search task guides by words or tool names; return slugs and resource URIs. Fetch a page with spine_get_reference or resources/read.",
       inputSchema: z.object({ query: z.string().trim().min(1).max(100), limit: z.number().int().min(1).max(8).optional() }) },
     async ({ query, limit }) => runTool(async () => ({ pages: await searchReference(query, limit) })),
   );
 
   server.registerTool(
     TOOL_NAMES.getReference,
-    { description: "Fetch one Spine task reference page with examples. Use spine_search_reference to choose its slug.",
+    { description: "Fetch a task guide and examples by slug; find slugs with spine_search_reference.",
       inputSchema: z.object({ slug: z.enum(REFERENCE_PAGES.map((page) => page.slug) as [typeof REFERENCE_PAGES[number]["slug"], ...typeof REFERENCE_PAGES[number]["slug"][]]) }) },
     async ({ slug }) => runTool(async () => ({ slug, uri: referenceUri(slug), markdown: await readReferencePage(slug) })),
   );
@@ -249,7 +249,7 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.capabilities,
     {
-      description: "Find specialized Spine tools by category or search term. Use spine_workflow_guide for an end-to-end task.",
+      description: "Find tools by category or term; use spine_workflow_guide for task sequences.",
       inputSchema: z.object({ area: z.enum(TOOL_AREAS).optional(),
         query: z.string().trim().min(1).max(100).optional(), status: z.enum(["implemented", "planned"]).optional() }),
     },
@@ -524,7 +524,7 @@ export function createServer(): McpServer {
 
   server.registerTool(
     TOOL_NAMES.startRigReview,
-    { description: `Inventory PNG parts, return a starter manifest and sourceHash, and open a local two-view rig editor. ${RIG_ASSEMBLY_RULE}`,
+    { description: `Inventory PNG parts, return a starter manifest and sourceHash, and open the two-view rig editor. ${RIG_ASSEMBLY_RULE}`,
       inputSchema: z.object({ imagesDir: z.string().min(1), manifestPath: z.string().min(1).optional(), outputDir: z.string().min(1), editorVersion: z.enum(["4.2", "4.3"]) }) },
     async (input) => runTool(async () => {
       const started = await startRigReview(input);
@@ -564,7 +564,7 @@ export function createServer(): McpServer {
 
   server.registerTool(
     TOOL_NAMES.buildRigFromLandmarks,
-    { description: `Call after the user explicitly approves the exact preview in a new chat message. Compile that unchanged PNG landmark rig into new Spine JSON and optionally import a native .spine project without overwriting outputs. ${RIG_CONFIRMATION_RULE}`,
+    { description: "Build an unchanged PNG rig preview into new Spine JSON and optionally a native .spine project without overwriting outputs. Requires explicit approval of that preview in a new user message; follow spine_preview_rig's nextAction and pass its reviewId.",
       inputSchema: z.object({ manifestPath: z.string().min(1), reviewId: z.uuid(), outputDataPath: z.string().min(1),
         outputProjectPath: z.string().min(1).optional(), editorVersion: z.enum(["4.2", "4.3"]) }) },
     async ({ reviewId, ...input }) => runTool(async () => {
@@ -581,7 +581,7 @@ export function createServer(): McpServer {
 
   server.registerTool(
     TOOL_NAMES.previewRig,
-    { description: "Render setup and ±30° joint bend overlays, then build a version-matched Spine Web Player preview when atlas packing is available.",
+    { description: "Render setup and ±30° bend overlays plus a version-matched Web Player when atlas packing is available; return approval instructions and reviewId.",
       inputSchema: z.object({ manifestPath: z.string().min(1), outputDir: z.string().min(1) }) },
     async ({ manifestPath, outputDir }) => runTool(async () => {
       const path = resolve(manifestPath);
@@ -1164,7 +1164,7 @@ export function createServer(): McpServer {
   server.registerTool(
     TOOL_NAMES.finalizeAnimation,
     {
-      description: "Deliver a reviewed Spine JSON animation: update a matching sibling .spine project when it exists, or create one when it does not. Verify the re-export, render frames, and return an HTML player and contact sheet. An updated project is backed up in the run directory.",
+      description: "Deliver reviewed JSON as a native .spine project, HTML player, and contact sheet. Verify re-export and frames; update and back up a matching sibling project, or create one.",
       inputSchema: z.object({ dataPath: z.string().min(1), dataSettingsPath: z.string().min(1),
         previewSettingsPath: z.string().min(1), outputDir: z.string().min(1),
         editorVersion: z.enum(["4.2", "4.3"]), animation: z.string().min(1),
@@ -1475,7 +1475,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "spine_replace_keyframe",
     {
-      description: "Stage one existing bone transform key's value and outgoing easing together. Requires an exact key with a next key. Changing a value clears the incoming Bézier segment; the selected easing replaces the outgoing segment. Presets need no controls.",
+      description: "Stage an exact bone key's value and outgoing easing; a next key is required. Value changes clear incoming Bézier easing. Presets need no controls.",
       inputSchema: z.object({ path: z.string().min(1), ...replaceKeyframeOperationSchema.omit({ kind: true }).shape,
         requestId: z.string().min(1).max(128).optional() }),
     },

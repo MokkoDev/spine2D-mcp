@@ -1,8 +1,8 @@
 # Edit an existing Spine project
 
-Use `spine_round_trip_edit` when the source is a `.spine` project and editor fidelity needs checking. It exports JSON, stages the requested operations, imports a **new** project, re-exports data, validates it, and renders before and after frames. The source project remains unchanged.
+For a `.spine` source requiring editor fidelity checks, `spine_round_trip_edit` exports JSON, stages edits, imports a **new** project, re-exports, validates, and renders before/after frames. The source stays unchanged.
 
-Save JSON export settings in Spine with `class: "export-json"` and **Nonessential data** enabled. For a single-skeleton JSON preview or final delivery, a PNG settings file such as `{ "class": "export-png", "fps": 30 }` is enough; the server fills the required animation and skin selectors. When rendering an existing native project with several skeletons, select one with `spine_render_preview`'s `skeleton` input or saved settings. A licensed Spine CLI, source images, and a display with OpenGL are required.
+Save JSON settings in Spine with `class: "export-json"` and **Nonessential data** enabled. For single-skeleton JSON preview or delivery, PNG settings such as `{ "class": "export-png", "fps": 30 }` suffice; the server fills animation and skin selectors. For a native project with multiple skeletons, select one through `spine_render_preview`'s `skeleton` input or saved settings. Rendering needs a licensed Spine CLI, source images, and an OpenGL display.
 
 ```json
 {
@@ -17,13 +17,13 @@ Save JSON export settings in Spine with `class: "export-json"` and **Nonessentia
 }
 ```
 
-Read `motionReview.hints`, `contactSheetUri`, PNG `pairs`, `projectPath`, and the run manifest. The full motion review is at `motionReview.reviewResourceUri`. Pass `imagesDir` when the exported image path does not resolve beside the project. On Linux, set `display` if the server lacks `DISPLAY`. For manual steps, use `spine_export_data` → staged JSON edit → `spine_import_data` → `spine_render_preview`.
+Inspect `motionReview.hints`, `contactSheetUri`, PNG `pairs`, `projectPath`, and the run manifest; full review is at `motionReview.reviewResourceUri`. Pass `imagesDir` if the exported image path does not resolve beside the project. On Linux, pass `display` if the server lacks `DISPLAY`. Manual sequence: `spine_export_data` → staged JSON edit → `spine_import_data` → `spine_render_preview`.
 
-For JSON only, start with [Start here](start-here.md). Exact fields: [FUNCTIONS.md](../../FUNCTIONS.md).
+For JSON only, see [Start here](start-here.md). Exact fields: [FUNCTIONS.md](../../FUNCTIONS.md).
 
 ## Final delivery from reviewed JSON
 
-Once the JSON has been reviewed and committed, call `spine_finalize_animation` to update a matching native project and create both previews in one run:
+After reviewing and committing JSON, `spine_finalize_animation` updates a matching native project and creates both previews:
 
 ```json
 {
@@ -37,6 +37,6 @@ Once the JSON has been reviewed and committed, call `spine_finalize_animation` t
 }
 ```
 
-If a `.spine` project with the JSON file's basename exists beside the JSON, finalization uses that project as the output. Pass `existingProjectPath` to select a matching project in another directory. The server first exports the existing project and requires all data outside the selected animation to match the reviewed JSON. Attachment images must also resolve from the existing project's location. It then imports and verifies the updated project, renders it, and replaces the existing `.spine` file only after every review step succeeds. The previous native project is backed up in the run directory. If no matching project exists, finalization creates one in the run directory. A mismatch fails without changing the existing project.
+Finalization selects a sibling `.spine` project with the JSON basename, or `existingProjectPath` for a matching project elsewhere. It exports that project and requires all data outside the selected animation to match reviewed JSON; attachment images must resolve from the project's location. It imports, verifies, and renders the update before replacing the original; the previous project is backed up in the run directory. Without a matching project, it creates one there. A mismatch leaves the existing project unchanged.
 
-The tool selects the imported skeleton name for PNG rendering even if the saved settings refer to an older project. It samples a contact sheet and builds a standalone HTML Web Player preview from the verified re-export. If `atlasPath` is omitted, it packs an atlas from the image directory. Use `imagesDir` if the source JSON's image path cannot be resolved. Deliver `projectPath`, `htmlPath`, and `contactSheetPath` from the same result. The response includes `projectMode` (`updated` or `created`), a backup path when updated, a compact animation summary, and sampled frame URIs. The complete manifest retains timeline and render details. A failed run has `failure.json` and does not report success.
+The tool renders PNGs with the imported skeleton name even if saved settings name an older project. It creates a contact sheet and standalone HTML Web Player from the verified re-export. Without `atlasPath`, it packs images into an atlas; use `imagesDir` if the source JSON image path cannot resolve. Deliver `projectPath`, `htmlPath`, and `contactSheetPath` together. The response includes `projectMode` (`updated` or `created`), backup path when updated, compact animation summary, and sampled frame URIs. The manifest retains timeline/render details; failures leave `failure.json` and do not report success.

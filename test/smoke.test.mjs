@@ -62,6 +62,8 @@ test("stdio MCP handshake exposes and calls only implemented tools", { timeout: 
     );
     assert.match(client.getInstructions(), /spine_workflow_guide/);
     assert.match(client.getInstructions(), /spine_preview_edit/);
+    assert.match(client.getInstructions(), /staged edit's diagnostics.*baseEditId/);
+    assert.match(client.getInstructions(), /end your turn.*While awaiting approval, do not build, poll, or sleep.*new user message/);
 
     const { resources } = await client.listResources();
     assert.ok(resources.some((resource) => resource.uri === "spine-docs://reference/start-here"));

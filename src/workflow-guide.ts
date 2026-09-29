@@ -1,23 +1,20 @@
-export const CLEANUP_GUIDANCE = "After the work and any pending review are complete, remove temporary files and folders unless they will be useful later.";
-export const RIG_ASSEMBLY_RULE = "For a new or revised rig made from separate images, attach every part to a parent landmark, place its art and joints, set draw order, and save the complete draft with spine_save_rig_draft. An unconnected starter manifest is not ready for review.";
-export const RIG_CONFIRMATION_RULE = "Show the connected preview, editable review link, bone hierarchy, joints, attachment placement, and draw order to the user. Ask whether they approve this exact rig, then end your turn. Do not build, poll, sleep, or keep the turn active while waiting for a reply. Only after a new user message explicitly approves this unchanged rig, call spine_build_rig_from_landmarks with the reviewId from spine_preview_rig. If the user declines or requests changes, revise and preview the rig again. A saved draft, tool result, or elapsed time is not approval. The MCP server checks that the previewed draft and source PNGs are unchanged; the agent must honor the user's chat reply.";
+export const CLEANUP_GUIDANCE = "After work and any pending review finish, remove temporary files unless useful later.";
+export const RIG_ASSEMBLY_RULE = "For new or revised rigs from separate images, connect every nonroot part to a parent landmark, place art and joints, set draw order, and save the full draft with spine_save_rig_draft. An unconnected starter manifest is not ready for review.";
+export const RIG_CONFIRMATION_RULE = "Show the connected preview, editable review link, bone hierarchy, joints, attachment placement, and draw order. Ask whether the user approves this exact rig, then end your turn. Do not build, poll, sleep, or keep the turn active while awaiting a reply. Only a new user message explicitly approving the unchanged rig authorizes spine_build_rig_from_landmarks with spine_preview_rig's reviewId. If declined or changed, revise and preview again. A draft, tool result, or elapsed time is not approval. The server checks the draft and source PNGs for changes; honor the user's chat reply.";
 export const RIG_READY_NEXT_ACTION = `Call spine_preview_rig and inspect the setup and bend snapshots. ${RIG_CONFIRMATION_RULE}`;
 export const RIG_INCOMPLETE_NEXT_ACTION = `Use the returned manifest and sourceHash. ${RIG_ASSEMBLY_RULE} Resolve all connection and build errors. ${RIG_READY_NEXT_ACTION}`;
 
 export const SERVER_INSTRUCTIONS = [
-  "Read spine-docs://reference/start-here for the short inspect, edit, preview, commit tutorial.",
-  "Use spine_search_reference to find a task page; fetch it with spine_get_reference or MCP resources/read.",
-  "Call spine_workflow_guide({goal:'choose'}) if the workflow is unclear, or spine_capabilities to find a specialized typed tool.",
+  "Read spine-docs://reference/start-here; use spine_search_reference for task guides, spine_workflow_guide({goal:'choose'}) for workflows, and spine_capabilities for tools.",
+  "For separate-image rigs, connect and preview the full draft; show it, ask approval, then end your turn. While awaiting approval, do not build, poll, or sleep. Build only after a new user message explicitly approves that unchanged preview.",
+  "For JSON edits, review the staged edit's diagnostics and net diff; revise with spine_preview_edit and baseEditId if needed, then commit the chosen editId.",
+  "Use spine_finalize_animation for native final delivery.",
   CLEANUP_GUIDANCE,
-  RIG_ASSEMBLY_RULE,
-  RIG_READY_NEXT_ACTION,
-  "For related JSON changes, spine_preview_edit stages a validated edit. Revise with baseEditId, review diagnostics and the net diff, then commit the chosen editId.",
-  "For final delivery of reviewed JSON as a native project with HTML and contact sheet, call spine_finalize_animation.",
 ].join(" ");
 
 const WORKFLOWS = {
   inspect: {
-    useWhen: "Understand a skeleton JSON or diagnose its structure before editing.",
+    useWhen: "Inspect skeleton JSON or diagnose its structure before editing.",
     primaryTools: ["spine_inspect_project", "spine_inspect_animation", "spine_validate_data"],
     needs: ["Spine skeleton JSON path"],
     steps: ["spine_inspect_project to see rig and animation names.",
@@ -28,39 +25,37 @@ const WORKFLOWS = {
     useWhen: "Create a new skeleton JSON or a new .spine project from scratch.",
     primaryTools: ["spine_create_skeleton", "spine_create_project"],
     needs: ["new output path", "Spine 4.2 or 4.3 version", "licensed Spine CLI only for a .spine project"],
-    steps: ["For rigging from separate images, select the rig_review workflow. Direct multi-part JSON commits and imports are blocked until the rig is built from a reviewed preview in this server session.",
-      "spine_create_skeleton for JSON-only work, or spine_create_project when a new .spine file is required.",
-      "spine_preview_edit to stage the rig, attachments, and initial animation together.",
-      "spine_commit_edit after reviewing the diff and diagnostics."],
+    steps: ["For separate images, use rig_review. Multi-part JSON commits and imports require a build from a reviewed preview in this server session.",
+      "Use spine_create_skeleton for JSON or spine_create_project for a new .spine file.",
+      "Stage the rig, attachments, and initial animation together with spine_preview_edit.",
+      "Review diff and diagnostics, then spine_commit_edit."],
   },
   rig_review: {
-    useWhen: "Place joints on separate PNG body parts, assemble a character, and create a native .spine project.",
+    useWhen: "Place joints on PNG parts and assemble a rig for a native .spine project.",
     primaryTools: ["spine_start_rig_review", "spine_save_rig_draft", "spine_validate_rig_manifest", "spine_preview_rig", "spine_build_rig_from_landmarks"],
     needs: ["PNG images directory", "Spine 4.2 or 4.3 version", "output directory", "licensed Spine CLI for a .spine project and atlas"],
-    steps: ["spine_start_rig_review inventories PNGs and opens the local part and assembly editor. Its starter manifest may have unconnected parts.",
-      "Use the returned manifest and sourceHash. The editor autosaves and supports Undo and Redo. No separate confirmation is needed for individual landmarks or draw order.",
+    steps: ["spine_start_rig_review inventories PNGs and opens the local editor; starter parts may be unconnected.",
+      "Use its manifest and sourceHash. The editor autosaves and supports Undo/Redo; individual landmarks and draw order need no separate confirmation.",
       RIG_ASSEMBLY_RULE,
-      "Reload the editor URL after saving.",
-      "Resolve all validation errors.",
-      RIG_READY_NEXT_ACTION,
-      "After a new user message explicitly approves the unchanged preview, pass its reviewId to spine_build_rig_from_landmarks to create JSON and optionally a native .spine project."],
+      "Reload the editor URL after saving; resolve all validation errors.",
+      RIG_READY_NEXT_ACTION],
   },
   round_trip: {
-    useWhen: "Edit an existing .spine project and verify the new project in one call.",
+    useWhen: "Edit an existing .spine project and verify its new version.",
     primaryTools: ["spine_round_trip_edit"],
     needs: [".spine project", "saved JSON export settings with nonessential: true",
       "saved PNG export settings", "animation name", "edit operations", "licensed Spine CLI and display/OpenGL"],
-    steps: ["spine_round_trip_edit exports, stages, imports a new project, re-exports, validates, and renders both versions.",
-      "Read contactSheetUri and pairs, then inspect projectPath and the run manifest."],
+    steps: ["spine_round_trip_edit exports, stages, imports, re-exports, validates, and renders both versions.",
+      "Inspect contactSheetUri, pairs, projectPath, and the run manifest."],
   },
   final_delivery: {
-    useWhen: "Deliver a reviewed skeleton JSON as a native .spine project with both visual previews.",
+    useWhen: "Deliver reviewed JSON as a native .spine project and two previews.",
     primaryTools: ["spine_finalize_animation"],
     needs: ["reviewed Spine JSON", "saved JSON and PNG export settings", "animation name",
       "images or an atlas", "licensed Spine CLI and display/OpenGL"],
-    steps: ["After reviewing and committing the JSON, call spine_finalize_animation once with its path and export settings.",
-      "The tool verifies the JSON re-export, renders frames, and creates a contact sheet and HTML player. It updates a matching existing .spine project after verification, or creates one when none exists.",
-      "Deliver projectPath, htmlPath, and contactSheetPath together; inspect previewReview hints and the full review in the run manifest when needed."],
+    steps: ["After review and commit, call spine_finalize_animation with the JSON path and export settings.",
+      "It verifies the re-export, renders frames, and creates a contact sheet and HTML player; it updates a matching .spine project or creates one.",
+      "Deliver projectPath, htmlPath, and contactSheetPath together; inspect previewReview hints and full manifest review when needed."],
   },
   new_motion: {
     useWhen: "Generate a new idle, blink, breathing, walk, run, recoil, or follow-through clip from a rig.",
