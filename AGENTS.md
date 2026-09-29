@@ -2,7 +2,7 @@
 
 ## Start here
 
-For Spine 4.2/4.3 skeleton JSON, follow [inspect → edit → preview → commit](docs/reference/start-here.md). In MCP, read `spine-docs://reference/start-here` or call `spine_get_reference` with `slug: "start-here"`. Use `spine_search_reference` for a task guide, then fetch its slug or resource URI. Use `spine_workflow_guide` with `goal: "choose"` when unsure of the workflow; `spine_capabilities` finds tools. [FUNCTIONS.md](FUNCTIONS.md) lists exact inputs, outputs, and limits. Only **Implemented** tools are registered.
+For Spine 4.2/4.3 skeleton JSON, follow [inspect → edit → preview → commit](docs/reference/start-here.md). In MCP, read `spine-docs://reference/start-here` or call `spine_get_reference` with `slug: "start-here"`. Use `spine_search_reference` for a task guide, then fetch its slug or resource URI. Use `spine_workflow_guide` with `goal: "choose"` when unsure of the workflow; `spine_capabilities` finds tools. [FUNCTIONS.md](FUNCTIONS.md) lists exact inputs, outputs, and limits.
 
 ## Project map
 

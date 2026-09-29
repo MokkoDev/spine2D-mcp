@@ -50,15 +50,13 @@ function parseTextResult(result) {
   return result.structuredContent;
 }
 
-test("stdio MCP handshake exposes and calls only implemented tools", { timeout: 20_000 }, async () => {
+test("stdio MCP handshake exposes and calls catalog tools", { timeout: 20_000 }, async () => {
   const client = await connect();
   try {
     const { tools } = await client.listTools();
     assert.deepEqual(
       tools.map((tool) => tool.name).sort(),
-      TOOL_CATALOG.filter((tool) => tool.status === "implemented")
-        .map((tool) => tool.name)
-        .sort(),
+      TOOL_CATALOG.map((tool) => tool.name).sort(),
     );
     assert.match(client.getInstructions(), /spine_workflow_guide/);
     assert.match(client.getInstructions(), /spine_preview_edit/);
@@ -101,10 +99,10 @@ test("stdio MCP handshake exposes and calls only implemented tools", { timeout: 
     assert.deepEqual([...new Set(TOOL_CATALOG.map((tool) => tool.area))].sort(), [...TOOL_AREAS].sort());
     assert.ok(capabilities.areas.some((area) => area.name === "Visual review" && area.count > 0));
     const visualTools = parseTextResult(await client.callTool({ name: "spine_capabilities", arguments: {
-      area: "Visual review", status: "implemented",
+      area: "Visual review",
     } }));
     assert.ok(visualTools.tools.length > 0);
-    assert.ok(visualTools.tools.every((tool) => tool.area === "Visual review" && tool.status === "implemented"));
+    assert.ok(visualTools.tools.every((tool) => tool.area === "Visual review" && !("status" in tool)));
     const poseTools = parseTextResult(await client.callTool({ name: "spine_capabilities", arguments: { query: "pose" } }));
     assert.ok(poseTools.tools.some((tool) => tool.name === "spine_save_pose"));
     assert.ok(poseTools.tools.every((tool) => `${tool.name} ${tool.purpose} ${tool.area}`.toLowerCase().includes("pose")));

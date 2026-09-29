@@ -48,7 +48,7 @@ For final delivery, `spine_finalize_animation` takes reviewed JSON, updates a ma
 
 ### Deferred tool search in supporting clients
 
-The server publishes typed schemas for every implemented tool. Clients choose eager loading or tool search. For an OpenAI Responses API client connected to a **remote** deployment (or Secure MCP Tunnel), configure MCP with `tool_search`:
+The server publishes typed schemas for every tool. Clients choose eager loading or tool search. For an OpenAI Responses API client connected to a **remote** deployment (or Secure MCP Tunnel), configure MCP with `tool_search`:
 
 ```json
 {

@@ -257,18 +257,17 @@ export function createServer(): McpServer {
     {
       description: "Find tools by category or term; use spine_workflow_guide for task sequences.",
       inputSchema: z.object({ area: z.enum(TOOL_AREAS).optional(),
-        query: z.string().trim().min(1).max(100).optional(), status: z.enum(["implemented", "planned"]).optional() }),
+        query: z.string().trim().min(1).max(100).optional() }),
     },
-    async ({ area, query, status }) => {
+    async ({ area, query }) => {
       const needle = query?.toLowerCase();
       const tools = TOOL_CATALOG.filter((tool) => (!area || tool.area === area)
-        && (!status || tool.status === status)
         && (!needle || `${tool.name} ${tool.purpose} ${tool.area}`.toLowerCase().includes(needle)));
       const areas = TOOL_AREAS.map((name) => ({ name,
-        count: TOOL_CATALOG.filter((tool) => tool.area === name && tool.status === "implemented").length }));
-      return jsonResult(area || query || status ? { tools, matchCount: tools.length }
+        count: TOOL_CATALOG.filter((tool) => tool.area === name).length }));
+      return jsonResult(area || query ? { tools, matchCount: tools.length }
         : { toolCount: TOOL_CATALOG.length, areas,
-          searchHint: "Pass area, query, or status to list matching tools." });
+          searchHint: "Pass area or query to list matching tools." });
     },
   );
 
