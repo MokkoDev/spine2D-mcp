@@ -18,6 +18,7 @@ export function rigSignature(document: SpineDocument): string {
     images: skeleton.images,
     bones: data.bones ?? [], slots: data.slots ?? [], skins: data.skins ?? [],
     ik: data.ik ?? [], transform: data.transform ?? [], path: data.path ?? [], physics: data.physics ?? [],
+    constraints: data.constraints ?? [],
   })).digest("hex");
 }
 
